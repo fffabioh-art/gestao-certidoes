@@ -1,0 +1,6 @@
+{
+  "name": "Mago das Licitações",
+  "description": "Sistema Inteligente de Gestão de Certidões, Licenças, Compliance e Documentação Empresarial para Licitações.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
