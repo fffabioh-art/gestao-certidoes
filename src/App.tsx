@@ -29,7 +29,15 @@ import {
   FolderOpen,
   RotateCcw,
   ArrowUpDown,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Zap,
+  Database,
+  Code2,
+  UserCheck,
+  KeyRound,
+  Sparkles,
+  FileScan,
+  Loader2
 } from 'lucide-react';
 
 // ============================================================================
@@ -43,26 +51,57 @@ export type DocumentCategory =
 
 export type ComputedStatus = 'vigente' | 'atencao' | 'vencido' | 'permanente';
 
+export type AutoFillFieldKey =
+  | 'cnpj_num'
+  | 'cnpj_fmt'
+  | 'ie_num'
+  | 'ie_fmt'
+  | 'im_num'
+  | 'im_fmt'
+  | 'cpf_num'
+  | 'cpf_fmt'
+  | 'nire'
+  | 'council'
+  | 'email'
+  | 'razao';
+
 export interface CompanyProfile {
   id: string;
-  companyName: string;
-  cnpj: string;
-  stateRegistration: string;
-  municipalRegistration: string;
-  cityState: string;
+  companyName: string; // Razão Social
+  tradeName: string; // Nome Fantasia
+  cnpj: string; // 12.345.678/0001-90
+  stateRegistration: string; // IE SEFAZ-PI
+  municipalRegistration: string; // IM / CMC Prefeitura
+  nire: string; // NIRE JUCEPI
+  cnaeMain: string; // CNAE Principal
+  cityState: string; // Teresina - PI
+  cep: string;
+  address: string;
+  email: string; // E-mail usado para receber certidões (TJPI, Prefeituras, etc.)
+  phone: string;
+  partnerName: string; // Sócio Administrador / Representante Legal
+  partnerCpf: string; // CPF do Sócio
+  partnerRg: string; // RG do Sócio
+  partnerBirthDate: string; // Data de Nascimento do Sócio (YYYY-MM-DD)
+  techResponsibleName: string; // Responsável Técnico (Químico/Engenheiro/Biólogo)
+  techResponsibleCouncil: string; // Registro CRQ / CREA-PI / CRBio
+  techResponsibleCpf: string; // CPF do RT
+  portalAccessNotes: string; // Senhas / Códigos de acesso nos portais
 }
 
 export interface CertidaoDocument {
   id: string;
   companyId: string;
-  templateKey?: string; // Links same certificate type across Piauí companies
+  templateKey?: string;
   name: string;
   category: DocumentCategory;
   issuer: string;
   emitterUrl: string;
-  registrationCode: string; // CNPJ, IE, IM, Protocolo ou Ref
+  registrationCode: string;
+  primaryAutoFillField?: AutoFillFieldKey;
+  portalFieldsHint?: string;
   issueDate: string; // YYYY-MM-DD or ''
-  validityDays: number | ''; // Ex: 30, 60, 90, 180, 365
+  validityDays: number | '';
   expirationDate: string; // YYYY-MM-DD or ''
   isPermanent: boolean;
   notes: string;
@@ -72,6 +111,335 @@ export interface CertidaoDocument {
   fileSize?: number;
   driveUrl?: string;
   updatedAt: string;
+}
+
+export interface ExtractedDocumentData {
+  documentTitle?: string;
+  matchedTemplateKey?: string;
+  category?: DocumentCategory;
+  issuer?: string;
+  issueDate?: string;
+  validityDays?: number;
+  expirationDate?: string;
+  isPermanent?: boolean;
+  controlCode?: string;
+  summaryNotes?: string;
+  companyData?: Partial<CompanyProfile>;
+}
+
+// ============================================================================
+// STRING & DIGITS HELPERS FOR AUTO-FILL
+// ============================================================================
+
+function onlyDigits(val: string | undefined): string {
+  return (val || '').replace(/\D+/g, '');
+}
+
+export function resolveCompanyFieldMap(comp: CompanyProfile): Record<
+  AutoFillFieldKey,
+  { label: string; value: string; description: string }
+> {
+  return {
+    cnpj_num: {
+      label: 'CNPJ (Só Números)',
+      value: onlyDigits(comp.cnpj),
+      description: 'Ideal para Receita Federal, TST, Caixa (FGTS) e SEFAZ-PI',
+    },
+    cnpj_fmt: {
+      label: 'CNPJ (Com Pontos)',
+      value: comp.cnpj || '',
+      description: 'Formato 00.000.000/0001-00',
+    },
+    ie_num: {
+      label: 'Inscrição Estadual (Só Números)',
+      value: onlyDigits(comp.stateRegistration),
+      description: 'SEFAZ-PI / SINTEGRA sem pontuação',
+    },
+    ie_fmt: {
+      label: 'Inscrição Estadual (Formatada)',
+      value: comp.stateRegistration || '',
+      description: 'Inscrição Estadual SEFAZ-PI',
+    },
+    im_num: {
+      label: 'Inscrição Municipal (Só Números)',
+      value: onlyDigits(comp.municipalRegistration),
+      description: 'Prefeitura / SEMF Teresina sem traço',
+    },
+    im_fmt: {
+      label: 'Inscrição Municipal (CMC)',
+      value: comp.municipalRegistration || '',
+      description: 'Cadastro Mercantil do Contribuinte',
+    },
+    cpf_num: {
+      label: 'CPF do Sócio (Só Números)',
+      value: onlyDigits(comp.partnerCpf),
+      description: 'Exigido no TJPI, Receita, JUCEPI e Prefeituras',
+    },
+    cpf_fmt: {
+      label: 'CPF do Sócio (Com Pontos)',
+      value: comp.partnerCpf || '',
+      description: `Sócio: ${comp.partnerName || 'Representante'}`,
+    },
+    nire: {
+      label: 'NIRE (JUCEPI)',
+      value: comp.nire || '',
+      description: 'Número de Identificação do Registro de Empresas',
+    },
+    council: {
+      label: 'Registro no Conselho (CREA/CRQ/CRBio)',
+      value: comp.techResponsibleCouncil || '',
+      description: `RT: ${comp.techResponsibleName || 'Responsável Técnico'}`,
+    },
+    email: {
+      label: 'E-mail para Certidões',
+      value: comp.email || '',
+      description: 'Para envio de certidões (TJPI, Prefeituras, etc.)',
+    },
+    razao: {
+      label: 'Razão Social',
+      value: comp.companyName || '',
+      description: 'Nome empresarial completo',
+    },
+  };
+}
+
+function buildAutoFillTargetUrl(rawUrl: string, comp: CompanyProfile): string {
+  if (!rawUrl) return '';
+  const map = resolveCompanyFieldMap(comp);
+  let url = rawUrl
+    .replace(/\{CNPJ_NUM\}/gi, encodeURIComponent(map.cnpj_num.value))
+    .replace(/\{CNPJ\}/gi, encodeURIComponent(map.cnpj_fmt.value))
+    .replace(/\{IE_NUM\}/gi, encodeURIComponent(map.ie_num.value))
+    .replace(/\{IE\}/gi, encodeURIComponent(map.ie_fmt.value))
+    .replace(/\{IM_NUM\}/gi, encodeURIComponent(map.im_num.value))
+    .replace(/\{IM\}/gi, encodeURIComponent(map.im_fmt.value))
+    .replace(/\{CPF_NUM\}/gi, encodeURIComponent(map.cpf_num.value))
+    .replace(/\{CPF\}/gi, encodeURIComponent(map.cpf_fmt.value))
+    .replace(/\{EMAIL\}/gi, encodeURIComponent(map.email.value))
+    .replace(/\{NIRE\}/gi, encodeURIComponent(map.nire.value));
+
+  const payload = {
+    cnpj_num: map.cnpj_num.value,
+    cnpj_fmt: map.cnpj_fmt.value,
+    ie_num: map.ie_num.value,
+    ie_fmt: map.ie_fmt.value,
+    im_num: map.im_num.value,
+    im_fmt: map.im_fmt.value,
+    cpf_num: map.cpf_num.value,
+    cpf_fmt: map.cpf_fmt.value,
+    nire: map.nire.value,
+    council: map.council.value,
+    email: map.email.value,
+    razao: comp.companyName,
+    socio: comp.partnerName,
+    nasc: comp.partnerBirthDate,
+    cep: onlyDigits(comp.cep),
+    tel: onlyDigits(comp.phone),
+  };
+
+  try {
+    const encodedPayload = encodeURIComponent(JSON.stringify(payload));
+    if (!url.includes('#')) {
+      url = `${url}#mago_autofill=${encodedPayload}`;
+    }
+  } catch {
+    // ignore
+  }
+
+  return url;
+}
+
+function generateBookmarkletCode(comp: CompanyProfile): string {
+  const data = {
+    cnpjNum: onlyDigits(comp.cnpj),
+    cnpjFmt: comp.cnpj,
+    ieNum: onlyDigits(comp.stateRegistration),
+    imNum: onlyDigits(comp.municipalRegistration),
+    cpfNum: onlyDigits(comp.partnerCpf),
+    cpfFmt: comp.partnerCpf,
+    nire: comp.nire,
+    council: comp.techResponsibleCouncil,
+    email: comp.email,
+    razao: comp.companyName,
+    socio: comp.partnerName,
+    tel: onlyDigits(comp.phone),
+    cep: onlyDigits(comp.cep),
+  };
+
+  const scriptBody = `(function(){
+    var D=${JSON.stringify(data)};
+    function setVal(el,val){
+      if(!el||!val)return false;
+      el.focus();
+      var setter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');
+      if(setter&&setter.set){setter.set.call(el,val);}else{el.value=val;}
+      el.dispatchEvent(new Event('input',{bubbles:true}));
+      el.dispatchEvent(new Event('change',{bubbles:true}));
+      el.dispatchEvent(new Event('keyup',{bubbles:true}));
+      el.dispatchEvent(new Event('blur',{bubbles:true}));
+      return true;
+    }
+    var inputs=Array.from(document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([disabled]):not([readonly])'));
+    var filled=0;
+    var captchaInput=null;
+    inputs.forEach(function(inp){
+      var attr=((inp.name||'')+' '+(inp.id||'')+' '+(inp.placeholder||'')+' '+(inp.title||'')+' '+(inp.className||'')).toLowerCase();
+      var lbl='';
+      if(inp.id){var l=document.querySelector('label[for="'+inp.id+'"]');if(l)lbl=l.innerText.toLowerCase();}
+      if(!lbl&&inp.parentElement)lbl=(inp.parentElement.innerText||'').toLowerCase().slice(0,120);
+      var meta=attr+' '+lbl;
+      var max=inp.maxLength||999;
+      if(/captcha|codigo|seguranca|imagem|desafio|verificacao|caracteres|letras/.test(meta)){
+        if(!captchaInput)captchaInput=inp;
+        return;
+      }
+      if(/cnpj|contribuinte|ni\\b|identificacao|documento|empregador/.test(meta)){
+        setVal(inp,max===14?D.cnpjNum:(/00\\.000/.test(meta)?D.cnpjFmt:D.cnpjNum));filled++;return;
+      }
+      if(/estadual|ie\\b|cgf|sintegra|sefaz/.test(meta)){
+        setVal(inp,D.ieNum);filled++;return;
+      }
+      if(/municipal|cmc|im\\b|inscricao_mun|mobiliari/.test(meta)){
+        setVal(inp,D.imNum);filled++;return;
+      }
+      if(/cpf|solicitante|representante/.test(meta)){
+        setVal(inp,max===11?D.cpfNum:D.cpfNum);filled++;return;
+      }
+      if(/email|e-mail|correio/.test(meta)){
+        setVal(inp,D.email);filled++;return;
+      }
+      if(/nire/.test(meta)){
+        setVal(inp,D.nire);filled++;return;
+      }
+      if(/crea|crq|crbio|conselho|registro/.test(meta)){
+        setVal(inp,D.council||D.cnpjNum);filled++;return;
+      }
+      if(/razao|nome_empres|requerente|interessado|nome/.test(meta)){
+        setVal(inp,D.razao);filled++;return;
+      }
+      if(/cep/.test(meta)){
+        setVal(inp,D.cep);filled++;return;
+      }
+      if(/telefone|celular|fone/.test(meta)){
+        setVal(inp,D.tel);filled++;return;
+      }
+    });
+    if(filled===0&&inputs.length>0){
+      var firstText=inputs.find(function(i){return i.type==='text'||i.type==='tel'||i.type==='number'||!i.type;});
+      if(firstText){setVal(firstText,D.cnpjNum);filled++;}
+    }
+    if(captchaInput){
+      captchaInput.focus();
+      captchaInput.style.outline='3px solid #2563eb';
+    }else if(inputs.length>1){
+      var nextEmpty=inputs.find(function(i){return !i.value;});
+      if(nextEmpty){nextEmpty.focus();nextEmpty.style.outline='3px solid #2563eb';}
+    }
+  })();`;
+
+  return `javascript:${encodeURIComponent(scriptBody.replace(/\s+/g, ' ').trim())}`;
+}
+
+function generateTampermonkeyScript(): string {
+  return `// ==UserScript==
+// @name         Mago das Licitações - AutoPreenchimento de Portais (Piauí e Federal)
+// @namespace    https://magodaslicitacoes.local/
+// @version      2.0
+// @description  Preenche automaticamente CNPJ, IE, IM, CPF, Razão Social e E-mail nos sites de certidões ao clicar em Emitir no Mago das Licitações e foca direto no Captcha!
+// @match        *://*.gov.br/*
+// @match        *://*.jus.br/*
+// @match        *://*.caixa.gov.br/*
+// @match        *://*.crea-pi.org.br/*
+// @match        *://*/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+  'use strict';
+
+  const hash = window.location.hash || '';
+  if (hash.includes('mago_autofill=')) {
+    try {
+      const encoded = hash.split('mago_autofill=')[1].split('&')[0];
+      const payload = JSON.parse(decodeURIComponent(encoded));
+      sessionStorage.setItem('MAGO_AUTOFILL_DATA', JSON.stringify(payload));
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+    } catch (e) {
+      console.warn('Erro ao ler dados do Mago das Licitações:', e);
+    }
+  }
+
+  const rawSaved = sessionStorage.getItem('MAGO_AUTOFILL_DATA');
+  if (!rawSaved) return;
+  const D = JSON.parse(rawSaved);
+
+  function setNativeValue(el, val) {
+    if (!el || !val) return;
+    el.focus();
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+    if (setter && setter.set) {
+      setter.set.call(el, val);
+    } else {
+      el.value = val;
+    }
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new Event('keyup', { bubbles: true }));
+    el.dispatchEvent(new Event('blur', { bubbles: true }));
+  }
+
+  function runAutoFill() {
+    const inputs = Array.from(document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([disabled]):not([readonly])'));
+    if (!inputs.length) return;
+
+    let captchaField = null;
+
+    inputs.forEach((inp) => {
+      if (inp.dataset.magoFilled === '1') return;
+      const attr = ((inp.name || '') + ' ' + (inp.id || '') + ' ' + (inp.placeholder || '') + ' ' + (inp.title || '') + ' ' + (inp.className || '')).toLowerCase();
+      let lbl = '';
+      if (inp.id) {
+        const l = document.querySelector('label[for="' + inp.id + '"]');
+        if (l) lbl = l.innerText.toLowerCase();
+      }
+      if (!lbl && inp.parentElement) lbl = (inp.parentElement.innerText || '').toLowerCase().slice(0, 120);
+      const meta = attr + ' ' + lbl;
+
+      if (/captcha|codigo|seguranca|imagem|desafio|verificacao|caracteres|letras/.test(meta)) {
+        if (!captchaField) captchaField = inp;
+        return;
+      }
+
+      if (/cnpj|contribuinte|ni\\b|identificacao|documento|empregador/.test(meta)) {
+        setNativeValue(inp, D.cnpj_num);
+        inp.dataset.magoFilled = '1';
+      } else if (/estadual|ie\\b|cgf|sintegra|sefaz/.test(meta)) {
+        setNativeValue(inp, D.ie_num);
+        inp.dataset.magoFilled = '1';
+      } else if (/municipal|cmc|im\\b|mobiliari/.test(meta)) {
+        setNativeValue(inp, D.im_num);
+        inp.dataset.magoFilled = '1';
+      } else if (/cpf|solicitante|representante/.test(meta)) {
+        setNativeValue(inp, D.cpf_num);
+        inp.dataset.magoFilled = '1';
+      } else if (/email|e-mail|correio/.test(meta)) {
+        setNativeValue(inp, D.email);
+        inp.dataset.magoFilled = '1';
+      } else if (/razao|requerente|interessado|nome_empres/.test(meta)) {
+        setNativeValue(inp, D.razao);
+        inp.dataset.magoFilled = '1';
+      }
+    });
+
+    if (captchaField && document.activeElement !== captchaField) {
+      captchaField.focus();
+      captchaField.style.outline = '3px solid #2563eb';
+    }
+  }
+
+  setTimeout(runAutoFill, 400);
+  setTimeout(runAutoFill, 1200);
+})();`;
 }
 
 // ============================================================================
@@ -153,26 +521,71 @@ const INITIAL_COMPANIES: CompanyProfile[] = [
   {
     id: 'comp-desinfecta',
     companyName: 'Desinfecta Serviços Ltda',
+    tradeName: 'Desinfecta Controle de Pragas e Higienização',
     cnpj: '12.345.678/0001-90',
     stateRegistration: '19.456.789-0',
     municipalRegistration: '458920-1',
+    nire: '22200123456',
+    cnaeMain: '81.22-2-00 - Imunização e controle de pragas urbanas',
     cityState: 'Teresina - PI',
+    cep: '64000-000',
+    address: 'Av. Frei Serafim, Centro, Teresina - PI',
+    email: 'licitacoes@desinfecta.com.br',
+    phone: '(86) 99999-0000',
+    partnerName: 'Sócio Administrador (Editar na Ficha)',
+    partnerCpf: '111.222.333-44',
+    partnerRg: '1.234.567 SSP-PI',
+    partnerBirthDate: '1985-05-15',
+    techResponsibleName: 'Responsável Técnico Habilitado',
+    techResponsibleCouncil: 'CRQ / CREA-PI 001234',
+    techResponsibleCpf: '222.333.444-55',
+    portalAccessNotes: 'Portal SEMF Teresina / SIAT: Login com CNPJ | JUCEPI via Gov.br',
   },
   {
     id: 'comp-piaui-2',
-    companyName: 'Empresa 02 - Piauí (Clique em Empresas para renomear)',
+    companyName: 'Empresa 02 - Piauí (Clique em Banco de Dados para editar)',
+    tradeName: 'Empresa 02 Serviços',
     cnpj: '23.456.789/0001-11',
     stateRegistration: '19.888.111-2',
     municipalRegistration: '512300-4',
+    nire: '22200654321',
+    cnaeMain: '81.21-4-00 - Limpeza em prédios e em domicílios',
     cityState: 'Teresina - PI',
+    cep: '64001-000',
+    address: 'Teresina - PI',
+    email: 'documentos@empresa02.com.br',
+    phone: '(86) 98888-1111',
+    partnerName: 'Representante Legal Empresa 02',
+    partnerCpf: '333.444.555-66',
+    partnerRg: '2.345.678 SSP-PI',
+    partnerBirthDate: '1982-10-20',
+    techResponsibleName: 'Engenheiro / Químico Responsável',
+    techResponsibleCouncil: 'CREA-PI 998877',
+    techResponsibleCpf: '444.555.666-77',
+    portalAccessNotes: '',
   },
   {
     id: 'comp-piaui-3',
-    companyName: 'Empresa 03 - Piauí (Clique em Empresas para renomear)',
+    companyName: 'Empresa 03 - Piauí (Clique em Banco de Dados para editar)',
+    tradeName: 'Empresa 03 Conservação',
     cnpj: '34.567.890/0001-22',
     stateRegistration: '19.777.222-3',
     municipalRegistration: '619800-7',
+    nire: '22200987654',
+    cnaeMain: '43.30-4-99 - Obras de acabamento e serviços',
     cityState: 'Parnaíba / Teresina - PI',
+    cep: '64200-000',
+    address: 'Piauí - PI',
+    email: 'contato@empresa03.com.br',
+    phone: '(86) 97777-2222',
+    partnerName: 'Representante Legal Empresa 03',
+    partnerCpf: '555.666.777-88',
+    partnerRg: '3.456.789 SSP-PI',
+    partnerBirthDate: '1990-02-12',
+    techResponsibleName: 'Responsável Técnico Empresa 03',
+    techResponsibleCouncil: 'CREA-PI 554433',
+    techResponsibleCpf: '666.777.888-99',
+    portalAccessNotes: '',
   },
 ];
 
@@ -184,7 +597,6 @@ function buildInitialDocumentsForCompany(
   const now = new Date().toISOString();
 
   return [
-    // A. Certidões Fiscais e Trabalhistas (Com Vencimento)
     {
       id: `${prefix}-doc-01`,
       companyId: company.id,
@@ -194,11 +606,13 @@ function buildInitialDocumentsForCompany(
       issuer: 'TST - Tribunal Superior do Trabalho',
       emitterUrl: 'https://cndt-certidao.tst.jus.br/',
       registrationCode: company.cnpj,
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'Pede: CNPJ (somente números) + Captcha da imagem',
       issueDate: useSampleDates ? '2026-03-18' : '',
       validityDays: 180,
       expirationDate: useSampleDates ? '2026-09-14' : '',
       isPermanent: false,
-      notes: 'Emissão gratuita online pelo portal do TST.',
+      notes: 'Ao anexar o PDF emitido, o sistema lê as datas e o código automaticamente.',
       fileType: 'none',
       updatedAt: now,
     },
@@ -212,11 +626,13 @@ function buildInitialDocumentsForCompany(
       emitterUrl:
         'https://solucoes.receita.fazenda.gov.br/Servicos/cnpjreva/Cnpjreva_Solicitacao.asp',
       registrationCode: company.cnpj,
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'Pede: CNPJ (14 dígitos sem pontos) + Captcha Sou Humano',
       issueDate: useSampleDates ? '2026-01-17' : '',
       validityDays: 90,
       expirationDate: useSampleDates ? '2026-04-17' : '',
       isPermanent: false,
-      notes: 'Comprovante de inscrição cadastral na Receita Federal.',
+      notes: 'Anexar o Cartão CNPJ aqui também preenche os dados da empresa automaticamente.',
       fileType: 'none',
       updatedAt: now,
     },
@@ -230,11 +646,13 @@ function buildInitialDocumentsForCompany(
       emitterUrl:
         'https://solucoes.receita.fazenda.gov.br/Servicos/certidaointernet/PJ/Emitir',
       registrationCode: company.cnpj,
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'Pede: NI/CNPJ (somente números) + Captcha',
       issueDate: useSampleDates ? '2026-04-23' : '',
       validityDays: 180,
       expirationDate: useSampleDates ? '2026-10-20' : '',
       isPermanent: false,
-      notes: 'Abrange tributos federais, previdenciários (INSS) e Dívida Ativa da União.',
+      notes: 'Abrange tributos federais, INSS e Dívida Ativa da União.',
       fileType: 'none',
       updatedAt: now,
     },
@@ -246,12 +664,14 @@ function buildInitialDocumentsForCompany(
       category: 'Fiscais e Trabalhistas',
       issuer: 'SEFAZ-PI / PGE-PI',
       emitterUrl: 'https://webas.sefaz.pi.gov.br/certidaonft-web/index.xhtml',
-      registrationCode: company.cnpj,
+      registrationCode: company.stateRegistration || company.cnpj,
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'Pede: CNPJ ou Inscrição Estadual (IE SEFAZ-PI) + Captcha',
       issueDate: '',
       validityDays: 60,
       expirationDate: '',
       isPermanent: false,
-      notes: 'Certidão Negativa da Dívida Ativa Estadual do Piauí (configurar data).',
+      notes: 'Certidão Negativa da Dívida Ativa Estadual do Piauí.',
       fileType: 'none',
       updatedAt: now,
     },
@@ -263,7 +683,9 @@ function buildInitialDocumentsForCompany(
       category: 'Fiscais e Trabalhistas',
       issuer: 'SEFAZ-PI (Secretaria da Fazenda do Piauí)',
       emitterUrl: 'https://webas.sefaz.pi.gov.br/certidaonft-web/index.xhtml',
-      registrationCode: company.cnpj,
+      registrationCode: company.stateRegistration || company.cnpj,
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'Pede: CNPJ ou IE (19...) + Código da Imagem (Captcha)',
       issueDate: useSampleDates ? '2026-03-12' : '',
       validityDays: 60,
       expirationDate: useSampleDates ? '2026-05-11' : '',
@@ -281,6 +703,8 @@ function buildInitialDocumentsForCompany(
       issuer: 'Prefeitura Municipal (SEMF Teresina / PI)',
       emitterUrl: 'https://semf.pmt.pi.gov.br/',
       registrationCode: company.municipalRegistration || company.cnpj,
+      primaryAutoFillField: 'im_num',
+      portalFieldsHint: 'Pede: Inscrição Municipal (CMC) ou CNPJ + Captcha',
       issueDate: useSampleDates ? '2026-07-06' : '',
       validityDays: 90,
       expirationDate: useSampleDates ? '2026-10-04' : '',
@@ -298,6 +722,8 @@ function buildInitialDocumentsForCompany(
       issuer: 'TJPI - Tribunal de Justiça do Piauí',
       emitterUrl: 'https://www.tjpi.jus.br/portaltjpi/certidoes/',
       registrationCode: company.cnpj,
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'Pede: CNPJ + Razão Social + CPF/Nome do Solicitante + E-mail + Captcha',
       issueDate: useSampleDates ? '2026-06-14' : '',
       validityDays: 90,
       expirationDate: useSampleDates ? '2026-09-12' : '',
@@ -318,6 +744,8 @@ function buildInitialDocumentsForCompany(
       emitterUrl:
         'https://consulta-crf.caixa.gov.br/consultacrf/pages/consultaEmpregador.jsf',
       registrationCode: company.cnpj,
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'Pede: Inscrição CNPJ (só números) + UF (PI) + Captcha',
       issueDate: useSampleDates ? '2026-07-02' : '',
       validityDays: 30,
       expirationDate: useSampleDates ? '2026-08-01' : '',
@@ -334,7 +762,9 @@ function buildInitialDocumentsForCompany(
       category: 'Fiscais e Trabalhistas',
       issuer: 'JUCEPI - Junta Comercial do Estado do Piauí',
       emitterUrl: 'https://www.pi.gov.br/orgaos/junta-comercial-do-estado-do-piaui-jucepi/',
-      registrationCode: company.cnpj,
+      registrationCode: company.nire || company.cnpj,
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'Pede: CNPJ ou NIRE + Login Gov.br',
       issueDate: useSampleDates ? '2025-08-08' : '',
       validityDays: 90,
       expirationDate: useSampleDates ? '2025-11-06' : '',
@@ -343,8 +773,6 @@ function buildInitialDocumentsForCompany(
       fileType: 'none',
       updatedAt: now,
     },
-
-    // B. Alvarás, Licenças e Conselhos (Com Vencimento)
     {
       id: `${prefix}-doc-10`,
       companyId: company.id,
@@ -353,7 +781,9 @@ function buildInitialDocumentsForCompany(
       category: 'Alvarás, Licenças e Conselhos',
       issuer: 'Prefeitura Municipal (Teresina / PI)',
       emitterUrl: 'https://semf.pmt.pi.gov.br/',
-      registrationCode: company.companyName,
+      registrationCode: company.municipalRegistration || company.cnpj,
+      primaryAutoFillField: 'im_num',
+      portalFieldsHint: 'Pede: Inscrição Municipal (CMC) ou CNPJ',
       issueDate: useSampleDates ? '2026-01-15' : '',
       validityDays: 365,
       expirationDate: useSampleDates ? '2027-01-15' : '',
@@ -371,6 +801,8 @@ function buildInitialDocumentsForCompany(
       issuer: 'CBMEPI - Corpo de Bombeiros Militar do Piauí',
       emitterUrl: 'https://www.bombeiros.pi.gov.br/',
       registrationCode: company.cnpj,
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'Pede: CNPJ + Protocolo de Vistoria CBMEPI',
       issueDate: useSampleDates ? '2026-02-10' : '',
       validityDays: 365,
       expirationDate: useSampleDates ? '2027-02-10' : '',
@@ -388,6 +820,8 @@ function buildInitialDocumentsForCompany(
       issuer: 'Órgão Ambiental (SEMARH-PI / SEMAM)',
       emitterUrl: 'https://www.semarh.pi.gov.br/',
       registrationCode: company.cnpj,
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'Pede: CNPJ + CPF Representante Legal',
       issueDate: useSampleDates ? '2026-01-01' : '',
       validityDays: 365,
       expirationDate: useSampleDates ? '2026-12-31' : '',
@@ -405,6 +839,8 @@ function buildInitialDocumentsForCompany(
       issuer: 'Vigilância Sanitária (DIVISA-PI / GVS Teresina)',
       emitterUrl: 'https://www.saude.pi.gov.br/',
       registrationCode: company.cnpj,
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'Pede: CNPJ + Inscrição Municipal + Dados do RT',
       issueDate: useSampleDates ? '2026-01-01' : '',
       validityDays: 365,
       expirationDate: useSampleDates ? '2026-12-31' : '',
@@ -422,6 +858,8 @@ function buildInitialDocumentsForCompany(
       issuer: 'ANVISA / Órgão Regulador',
       emitterUrl: 'https://consultas.anvisa.gov.br/',
       registrationCode: 'Ref: 009.2025',
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'Pede: CNPJ da Empresa',
       issueDate: useSampleDates ? '2025-11-15' : '',
       validityDays: 365,
       expirationDate: useSampleDates ? '2026-11-15' : '',
@@ -438,7 +876,9 @@ function buildInitialDocumentsForCompany(
       category: 'Alvarás, Licenças e Conselhos',
       issuer: 'Conselho de Classe (CRQ / CRBio / CREA-PI)',
       emitterUrl: 'https://www.crea-pi.org.br/',
-      registrationCode: company.cnpj,
+      registrationCode: company.techResponsibleCouncil || company.cnpj,
+      primaryAutoFillField: 'council',
+      portalFieldsHint: 'Pede: CNPJ ou Registro no Conselho + CPF do RT',
       issueDate: useSampleDates ? '2026-03-01' : '',
       validityDays: 365,
       expirationDate: useSampleDates ? '2027-03-01' : '',
@@ -455,7 +895,9 @@ function buildInitialDocumentsForCompany(
       category: 'Alvarás, Licenças e Conselhos',
       issuer: 'Conselho de Classe (CRQ / CRBio / CREA-PI)',
       emitterUrl: 'https://www.crea-pi.org.br/',
-      registrationCode: company.cnpj,
+      registrationCode: company.techResponsibleCouncil || company.cnpj,
+      primaryAutoFillField: 'council',
+      portalFieldsHint: 'Pede: Registro no Conselho / CPF do RT',
       issueDate: useSampleDates ? '2026-03-10' : '',
       validityDays: 365,
       expirationDate: useSampleDates ? '2027-03-10' : '',
@@ -473,6 +915,8 @@ function buildInitialDocumentsForCompany(
       issuer: 'Operador Credenciado / SEMARH-PI',
       emitterUrl: 'https://sinir.gov.br/',
       registrationCode: company.cnpj,
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'Pede: CNPJ + Login SINIR/MTR',
       issueDate: useSampleDates ? '2026-02-01' : '',
       validityDays: 365,
       expirationDate: useSampleDates ? '2027-02-01' : '',
@@ -481,8 +925,6 @@ function buildInitialDocumentsForCompany(
       fileType: 'none',
       updatedAt: now,
     },
-
-    // C. Societário, Contábil e Qualificação Técnica (Permanentes ou Anuais)
     {
       id: `${prefix}-doc-18`,
       companyId: company.id,
@@ -491,7 +933,9 @@ function buildInitialDocumentsForCompany(
       category: 'Societário, Contábil e Qualificação Técnica',
       issuer: 'JUCEPI - Junta Comercial do Estado do Piauí',
       emitterUrl: 'https://www.pi.gov.br/orgaos/junta-comercial-do-estado-do-piaui-jucepi/',
-      registrationCode: company.cnpj,
+      registrationCode: company.nire || company.cnpj,
+      primaryAutoFillField: 'nire',
+      portalFieldsHint: 'Pede: NIRE ou CNPJ',
       issueDate: '2024-05-10',
       validityDays: '',
       expirationDate: '',
@@ -510,6 +954,8 @@ function buildInitialDocumentsForCompany(
       emitterUrl:
         'https://solucoes.receita.fazenda.gov.br/Servicos/cnpjreva/Cnpjreva_Solicitacao.asp',
       registrationCode: company.cnpj,
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'Emitido junto ao Cartão CNPJ na Receita Federal',
       issueDate: '2025-11-06',
       validityDays: '',
       expirationDate: '',
@@ -526,7 +972,9 @@ function buildInitialDocumentsForCompany(
       category: 'Societário, Contábil e Qualificação Técnica',
       issuer: 'DETRAN-PI / SENATRAN',
       emitterUrl: 'https://www.detran.pi.gov.br/',
-      registrationCode: company.cnpj,
+      registrationCode: company.partnerCpf,
+      primaryAutoFillField: 'cpf_num',
+      portalFieldsHint: 'Pede: CPF do Sócio Administrador',
       issueDate: useSampleDates ? '2023-08-15' : '',
       validityDays: 1825,
       expirationDate: useSampleDates ? '2028-08-14' : '',
@@ -544,6 +992,8 @@ function buildInitialDocumentsForCompany(
       issuer: 'SEFAZ-PI / Prefeitura Municipal',
       emitterUrl: 'https://webas.sefaz.pi.gov.br/sintegra/',
       registrationCode: `IE: ${company.stateRegistration} | IM: ${company.municipalRegistration}`,
+      primaryAutoFillField: 'ie_num',
+      portalFieldsHint: 'Pede: Inscrição Estadual (IE) ou CNPJ + Captcha',
       issueDate: '2022-03-01',
       validityDays: '',
       expirationDate: '',
@@ -561,6 +1011,8 @@ function buildInitialDocumentsForCompany(
       issuer: 'Contabilidade / SPED ECD / JUCEPI',
       emitterUrl: 'https://sped.rfb.gov.br/',
       registrationCode: company.cnpj,
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'Pede: CNPJ + Recibo SPED',
       issueDate: useSampleDates ? '2026-04-30' : '',
       validityDays: 365,
       expirationDate: useSampleDates ? '2027-04-30' : '',
@@ -578,6 +1030,8 @@ function buildInitialDocumentsForCompany(
       issuer: 'Clientes Contratantes / Acervo Técnico',
       emitterUrl: '',
       registrationCode: company.cnpj,
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'Acervo interno da empresa',
       issueDate: '2025-06-01',
       validityDays: '',
       expirationDate: '',
@@ -714,6 +1168,28 @@ function evaluateDocumentStatus(
 }
 
 // ============================================================================
+// SERVER API HELPER: READ PDF / IMAGE VIA GEMINI
+// ============================================================================
+
+async function analyzeDocumentViaServer(
+  dataUrl: string,
+  fileName: string,
+  mode: 'certificate' | 'company_profile' | 'auto_match'
+): Promise<ExtractedDocumentData | null> {
+  const res = await fetch('/api/analyze-document', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dataUrl, fileName, mode }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Falha ao ler documento.' }));
+    throw new Error(err.error || 'Erro ao analisar o PDF.');
+  }
+  const json = await res.json();
+  return (json.data as ExtractedDocumentData) || null;
+}
+
+// ============================================================================
 // MAIN APPLICATION COMPONENT
 // ============================================================================
 
@@ -741,13 +1217,18 @@ export default function App() {
     }
   }, [darkMode]);
 
-  // Multi-company state (Piauí companies)
+  // Multi-company state
   const [companies, setCompanies] = useState<CompanyProfile[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_COMPANIES);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((c: Partial<CompanyProfile>, idx: number) => ({
+            ...INITIAL_COMPANIES[idx % INITIAL_COMPANIES.length],
+            ...c,
+          }));
+        }
       }
       return INITIAL_COMPANIES;
     } catch {
@@ -759,7 +1240,7 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY_COMPANIES, JSON.stringify(companies));
   }, [companies]);
 
-  // Selected Company Filter ('all' or specific company.id)
+  // Selected Company Filter
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_ACTIVE_COMPANY);
     return saved || INITIAL_COMPANIES[0].id;
@@ -773,7 +1254,7 @@ export default function App() {
     return companies.find((c) => c.id === selectedCompanyId) || companies[0];
   }, [companies, selectedCompanyId]);
 
-  // Warning threshold days (15, 30, 45)
+  // Warning threshold days
   const [warningThresholdDays, setWarningThresholdDays] = useState<number>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_WARNING_DAYS);
     return saved ? Number(saved) || 30 : 30;
@@ -808,7 +1289,22 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState<'all' | ComputedStatus>('all');
   const [categoryFilter, setCategoryFilter] = useState<'all' | DocumentCategory>('all');
   const [sortBy, setSortBy] = useState<'priority' | 'name' | 'category' | 'expiration'>('priority');
-  const [activeSection, setActiveSection] = useState<'dashboard' | 'links' | 'companies' | 'backup'>('dashboard');
+  const [activeSection, setActiveSection] = useState<
+    'dashboard' | 'company_db' | 'links' | 'backup'
+  >('dashboard');
+
+  // PDF Reading / Extraction Status State
+  const [analyzingDocId, setAnalyzingDocId] = useState<string | null>(null);
+  const [isSmartReadingBatch, setIsSmartReadingBatch] = useState(false);
+  const [lastExtractionSummary, setLastExtractionSummary] = useState<{
+    fileName: string;
+    documentTitle: string;
+    companyName: string;
+    issueDate: string;
+    expirationDate: string;
+    controlCode: string;
+    fieldsUpdatedInCompany: string[];
+  } | null>(null);
 
   // Copy & Toast feedback
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -818,13 +1314,29 @@ export default function App() {
     setToastMessage(msg);
     setTimeout(() => {
       setToastMessage((prev) => (prev === msg ? null : prev));
-    }, 3200);
+    }, 4200);
   };
 
-  // Inline cell editing state (including emitterUrl!)
+  // Active Emission Assistant Drawer
+  const [activeEmissionSession, setActiveEmissionSession] = useState<{
+    doc: CertidaoDocument;
+    company: CompanyProfile;
+    copiedFieldLabel: string;
+    copiedValue: string;
+    targetUrl: string;
+  } | null>(null);
+
+  // Inline cell editing state
   const [inlineEdit, setInlineEdit] = useState<{
     docId: string;
-    field: 'name' | 'issuer' | 'registrationCode' | 'emitterUrl' | 'issueDate' | 'validityDays' | 'expirationDate';
+    field:
+      | 'name'
+      | 'issuer'
+      | 'registrationCode'
+      | 'emitterUrl'
+      | 'issueDate'
+      | 'validityDays'
+      | 'expirationDate';
     value: string;
     syncAllCompanies?: boolean;
   } | null>(null);
@@ -839,6 +1351,7 @@ export default function App() {
     newExpirationDate: string;
     newDriveUrl: string;
     newFile?: File | null;
+    extractedInfo?: string;
   } | null>(null);
   const [previewModal, setPreviewModal] = useState<{
     doc: CertidaoDocument;
@@ -846,6 +1359,7 @@ export default function App() {
   } | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [showTampermonkeyModal, setShowTampermonkeyModal] = useState(false);
 
   // New Company Modal state
   const [companyModal, setCompanyModal] = useState<{
@@ -855,6 +1369,8 @@ export default function App() {
   } | null>(null);
 
   const fileInputImportRef = useRef<HTMLInputElement | null>(null);
+  const smartPdfInputRef = useRef<HTMLInputElement | null>(null);
+  const companyPdfInputRef = useRef<HTMLInputElement | null>(null);
 
   // Filter documents by selected company first
   const companyScopedDocuments = useMemo(() => {
@@ -872,7 +1388,7 @@ export default function App() {
     }));
   }, [companyScopedDocuments, companies, activeCompany, warningThresholdDays]);
 
-  // Executive Summary counts (for currently selected company or all)
+  // Executive Summary counts
   const summaryCounts = useMemo(() => {
     const counts = {
       total: enrichedDocuments.length,
@@ -933,24 +1449,438 @@ export default function App() {
   }, [enrichedDocuments, searchQuery, statusFilter, categoryFilter, sortBy]);
 
   // ============================================================================
-  // HANDLERS
+  // HELPER: MERGE EXTRACTED COMPANY DATA INTO COMPANY DATABASE
+  // ============================================================================
+
+  const mergeExtractedCompanyProfile = (
+    targetCompanyId: string,
+    extractedComp: Partial<CompanyProfile> | undefined
+  ): string[] => {
+    if (!extractedComp) return [];
+    const updatedFields: string[] = [];
+
+    setCompanies((prev) =>
+      prev.map((c) => {
+        if (c.id !== targetCompanyId) return c;
+        const next = { ...c };
+
+        if (
+          extractedComp.companyName &&
+          extractedComp.companyName.trim().length > 3 &&
+          (c.companyName.includes('Empresa 0') || c.companyName.includes('Clique'))
+        ) {
+          next.companyName = extractedComp.companyName.trim();
+          updatedFields.push('Razão Social');
+        }
+        if (extractedComp.tradeName && !c.tradeName) {
+          next.tradeName = extractedComp.tradeName.trim();
+          updatedFields.push('Nome Fantasia');
+        }
+        if (extractedComp.cnpj && onlyDigits(extractedComp.cnpj).length === 14) {
+          next.cnpj = extractedComp.cnpj.trim();
+          updatedFields.push('CNPJ');
+        }
+        if (extractedComp.stateRegistration && extractedComp.stateRegistration.trim()) {
+          next.stateRegistration = extractedComp.stateRegistration.trim();
+          updatedFields.push('Inscrição Estadual (IE)');
+        }
+        if (extractedComp.municipalRegistration && extractedComp.municipalRegistration.trim()) {
+          next.municipalRegistration = extractedComp.municipalRegistration.trim();
+          updatedFields.push('Inscrição Municipal (IM)');
+        }
+        if (extractedComp.nire && extractedComp.nire.trim()) {
+          next.nire = extractedComp.nire.trim();
+          updatedFields.push('NIRE');
+        }
+        if (extractedComp.cnaeMain && extractedComp.cnaeMain.trim()) {
+          next.cnaeMain = extractedComp.cnaeMain.trim();
+          updatedFields.push('CNAE');
+        }
+        if (extractedComp.cep && extractedComp.cep.trim()) {
+          next.cep = extractedComp.cep.trim();
+          updatedFields.push('CEP');
+        }
+        if (extractedComp.address && extractedComp.address.trim()) {
+          next.address = extractedComp.address.trim();
+          updatedFields.push('Endereço');
+        }
+        if (extractedComp.cityState && extractedComp.cityState.trim()) {
+          next.cityState = extractedComp.cityState.trim();
+          updatedFields.push('Município/UF');
+        }
+        if (extractedComp.email && extractedComp.email.trim()) {
+          next.email = extractedComp.email.trim();
+          updatedFields.push('E-mail');
+        }
+        if (extractedComp.phone && extractedComp.phone.trim()) {
+          next.phone = extractedComp.phone.trim();
+          updatedFields.push('Telefone');
+        }
+        if (extractedComp.partnerName && extractedComp.partnerName.trim()) {
+          next.partnerName = extractedComp.partnerName.trim();
+          updatedFields.push('Sócio Administrador');
+        }
+        if (extractedComp.partnerCpf && extractedComp.partnerCpf.trim()) {
+          next.partnerCpf = extractedComp.partnerCpf.trim();
+          updatedFields.push('CPF do Sócio');
+        }
+        if (extractedComp.techResponsibleName && extractedComp.techResponsibleName.trim()) {
+          next.techResponsibleName = extractedComp.techResponsibleName.trim();
+          updatedFields.push('Responsável Técnico');
+        }
+        if (extractedComp.techResponsibleCouncil && extractedComp.techResponsibleCouncil.trim()) {
+          next.techResponsibleCouncil = extractedComp.techResponsibleCouncil.trim();
+          updatedFields.push('Registro no Conselho');
+        }
+
+        return next;
+      })
+    );
+
+    return updatedFields;
+  };
+
+  // ============================================================================
+  // HANDLERS: AUTOMATIC PDF READING & DATA EXTRACTION
+  // ============================================================================
+
+  /**
+   * 1. Anexar PDF direto em uma linha específica da lista:
+   * Salva o PDF no navegador E lê automaticamente as datas de emissão, vencimento,
+   * código de controle e dados da empresa!
+   */
+  const handleAttachFileToDoc = async (docId: string, file: File) => {
+    try {
+      setAnalyzingDocId(docId);
+      showToast(`Anexando e lendo automaticamente "${file.name}"...`);
+
+      const dataUrl = await readFileAsDataURL(file);
+      await saveAttachmentData(docId, dataUrl);
+
+      // Salva o anexo imediatamente
+      setDocuments((prev) =>
+        prev.map((d) =>
+          d.id === docId
+            ? {
+                ...d,
+                fileType: 'local',
+                fileName: file.name,
+                fileMimeType: file.type || 'application/pdf',
+                fileSize: file.size,
+                updatedAt: new Date().toISOString(),
+              }
+            : d
+        )
+      );
+
+      // Agora lê o conteúdo do PDF via servidor Gemini para extrair datas e dados
+      const targetDoc = documents.find((d) => d.id === docId);
+      const extracted = await analyzeDocumentViaServer(dataUrl, file.name, 'certificate');
+
+      if (extracted) {
+        const companyIdToUpdate = targetDoc?.companyId || activeCompany.id;
+        const fieldsUpdated = mergeExtractedCompanyProfile(
+          companyIdToUpdate,
+          extracted.companyData
+        );
+
+        setDocuments((prev) =>
+          prev.map((d) => {
+            if (d.id !== docId) return d;
+
+            const newIssue = extracted.issueDate || d.issueDate;
+            let newValidity =
+              extracted.validityDays && extracted.validityDays > 0
+                ? extracted.validityDays
+                : d.validityDays;
+            let newExp = extracted.expirationDate || d.expirationDate;
+
+            if (newIssue && !newExp && newValidity !== '' && Number(newValidity) > 0) {
+              newExp = addDaysToDateString(newIssue, Number(newValidity));
+            }
+            if (newIssue && newExp && (!newValidity || newValidity === '')) {
+              const p1 = new Date(newIssue).getTime();
+              const p2 = new Date(newExp).getTime();
+              const diff = Math.round((p2 - p1) / (1000 * 60 * 60 * 24));
+              if (diff > 0) newValidity = diff;
+            }
+
+            const controlNote = extracted.controlCode
+              ? `Código/Controle: ${extracted.controlCode}`
+              : '';
+            const summaryNote = extracted.summaryNotes || '';
+            const combinedNotes = [controlNote, summaryNote].filter(Boolean).join(' · ') || d.notes;
+
+            return {
+              ...d,
+              issueDate: newIssue,
+              validityDays: newValidity,
+              expirationDate: d.isPermanent ? '' : newExp,
+              notes: combinedNotes,
+              registrationCode: extracted.companyData?.cnpj || d.registrationCode,
+              updatedAt: new Date().toISOString(),
+            };
+          })
+        );
+
+        setLastExtractionSummary({
+          fileName: file.name,
+          documentTitle: extracted.documentTitle || targetDoc?.name || 'Documento',
+          companyName:
+            extracted.companyData?.companyName || activeCompany.companyName,
+          issueDate: extracted.issueDate || '—',
+          expirationDate: extracted.expirationDate || '—',
+          controlCode: extracted.controlCode || '—',
+          fieldsUpdatedInCompany: fieldsUpdated,
+        });
+
+        showToast(
+          `PDF lido com sucesso! Emissão: ${formatDateBR(extracted.issueDate || '')} · Vencimento: ${formatDateBR(extracted.expirationDate || '')}`
+        );
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao ler o PDF.';
+      showToast(`Arquivo salvo (leitura automática indisponível: ${msg})`);
+    } finally {
+      setAnalyzingDocId(null);
+    }
+  };
+
+  /**
+   * 2. Leitor Inteligente de PDF Avulso (Botão no Topo da Lista):
+   * O usuário seleciona 1 ou mais PDFs (ex: várias certidões ou Cartão CNPJ)
+   * e o programa identifica sozinho qual é a certidão e qual é a empresa (pelo CNPJ),
+   * atualizando a linha certa e o banco de dados da empresa!
+   */
+  const handleSmartUploadAndMatch = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setIsSmartReadingBatch(true);
+
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        showToast(`Lendo documento (${i + 1}/${files.length}): "${file.name}"...`);
+        const dataUrl = await readFileAsDataURL(file);
+        const extracted = await analyzeDocumentViaServer(dataUrl, file.name, 'auto_match');
+        if (!extracted) continue;
+
+        // 1. Descobrir de qual empresa é (pelo CNPJ extraído ou empresa ativa)
+        const extractedCnpjDigits = onlyDigits(extracted.companyData?.cnpj);
+        let matchedCompany = companies.find(
+          (c) => extractedCnpjDigits && onlyDigits(c.cnpj) === extractedCnpjDigits
+        );
+
+        if (!matchedCompany) {
+          matchedCompany = activeCompany;
+        }
+
+        // Atualiza o Banco de Dados da empresa com todos os dados encontrados no PDF
+        const fieldsUpdated = mergeExtractedCompanyProfile(
+          matchedCompany.id,
+          extracted.companyData
+        );
+
+        // 2. Descobrir qual certidão daquela empresa corresponde ao PDF lido
+        const companyDocs = documents.filter((d) => d.companyId === matchedCompany!.id);
+        let matchedDoc = companyDocs.find(
+          (d) =>
+            extracted.matchedTemplateKey && d.templateKey === extracted.matchedTemplateKey
+        );
+
+        if (!matchedDoc && extracted.documentTitle) {
+          const titleLower = extracted.documentTitle.toLowerCase();
+          matchedDoc = companyDocs.find((d) =>
+            d.name.toLowerCase().includes(titleLower.slice(0, 12))
+          );
+        }
+
+        if (matchedDoc) {
+          await saveAttachmentData(matchedDoc.id, dataUrl);
+          const targetId = matchedDoc.id;
+
+          setDocuments((prev) =>
+            prev.map((d) => {
+              if (d.id !== targetId) return d;
+              const newIssue = extracted.issueDate || d.issueDate;
+              const newValidity =
+                extracted.validityDays && extracted.validityDays > 0
+                  ? extracted.validityDays
+                  : d.validityDays;
+              let newExp = extracted.expirationDate || d.expirationDate;
+              if (newIssue && !newExp && newValidity !== '' && Number(newValidity) > 0) {
+                newExp = addDaysToDateString(newIssue, Number(newValidity));
+              }
+              const controlNote = extracted.controlCode
+                ? `Código/Controle: ${extracted.controlCode}`
+                : '';
+              const summaryNote = extracted.summaryNotes || '';
+              return {
+                ...d,
+                fileType: 'local',
+                fileName: file.name,
+                fileMimeType: file.type || 'application/pdf',
+                fileSize: file.size,
+                issueDate: newIssue,
+                validityDays: newValidity,
+                expirationDate: d.isPermanent ? '' : newExp,
+                notes: [controlNote, summaryNote].filter(Boolean).join(' · ') || d.notes,
+                updatedAt: new Date().toISOString(),
+              };
+            })
+          );
+
+          setLastExtractionSummary({
+            fileName: file.name,
+            documentTitle: matchedDoc.name,
+            companyName: matchedCompany.companyName,
+            issueDate: extracted.issueDate || '—',
+            expirationDate: extracted.expirationDate || '—',
+            controlCode: extracted.controlCode || '—',
+            fieldsUpdatedInCompany: fieldsUpdated,
+          });
+        } else {
+          // Se for uma certidão extra não listada nas 23, cria automaticamente na empresa!
+          const newDocId = `doc-${Date.now()}-${i}`;
+          await saveAttachmentData(newDocId, dataUrl);
+          const newDoc: CertidaoDocument = {
+            id: newDocId,
+            companyId: matchedCompany.id,
+            name: extracted.documentTitle || file.name.replace(/\.[^.]+$/, ''),
+            category: extracted.category || 'Fiscais e Trabalhistas',
+            issuer: extracted.issuer || 'Órgão Identificado via PDF',
+            emitterUrl: '',
+            registrationCode: extracted.companyData?.cnpj || matchedCompany.cnpj,
+            primaryAutoFillField: 'cnpj_num',
+            issueDate: extracted.issueDate || getTodayDateString(),
+            validityDays: extracted.validityDays || 90,
+            expirationDate: extracted.expirationDate || '',
+            isPermanent: Boolean(extracted.isPermanent),
+            notes:
+              [
+                extracted.controlCode ? `Código: ${extracted.controlCode}` : '',
+                extracted.summaryNotes || '',
+              ]
+                .filter(Boolean)
+                .join(' · ') || 'Cadastrado automaticamente via leitura de PDF.',
+            fileType: 'local',
+            fileName: file.name,
+            fileMimeType: file.type || 'application/pdf',
+            fileSize: file.size,
+            updatedAt: new Date().toISOString(),
+          };
+          setDocuments((prev) => [newDoc, ...prev]);
+        }
+      }
+      showToast('Leitura inteligente de PDF concluída com sucesso!');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Falha na leitura do PDF.';
+      showToast(`Erro ao ler PDF: ${msg}`);
+    } finally {
+      setIsSmartReadingBatch(false);
+    }
+  };
+
+  /**
+   * 3. Preencher toda a Ficha da Empresa lendo um PDF (Cartão CNPJ, Contrato Social, JUCEPI, etc.)
+   */
+  const handlePopulateCompanyFromPdf = async (file: File) => {
+    setIsSmartReadingBatch(true);
+    try {
+      showToast(`Extraindo dados da empresa de "${file.name}"...`);
+      const dataUrl = await readFileAsDataURL(file);
+      const extracted = await analyzeDocumentViaServer(dataUrl, file.name, 'company_profile');
+
+      if (!extracted?.companyData) {
+        showToast('Não foi possível identificar dados cadastrais neste arquivo.');
+        return;
+      }
+
+      const cd = extracted.companyData;
+      setCompanies((prev) =>
+        prev.map((c) => {
+          if (c.id !== activeCompany.id) return c;
+          return {
+            ...c,
+            companyName: cd.companyName || c.companyName,
+            tradeName: cd.tradeName || c.tradeName,
+            cnpj: cd.cnpj || c.cnpj,
+            stateRegistration: cd.stateRegistration || c.stateRegistration,
+            municipalRegistration: cd.municipalRegistration || c.municipalRegistration,
+            nire: cd.nire || c.nire,
+            cnaeMain: cd.cnaeMain || c.cnaeMain,
+            cityState: cd.cityState || c.cityState,
+            cep: cd.cep || c.cep,
+            address: cd.address || c.address,
+            email: cd.email || c.email,
+            phone: cd.phone || c.phone,
+            partnerName: cd.partnerName || c.partnerName,
+            partnerCpf: cd.partnerCpf || c.partnerCpf,
+            partnerRg: cd.partnerRg || c.partnerRg,
+            partnerBirthDate: cd.partnerBirthDate || c.partnerBirthDate,
+            techResponsibleName: cd.techResponsibleName || c.techResponsibleName,
+            techResponsibleCouncil: cd.techResponsibleCouncil || c.techResponsibleCouncil,
+            techResponsibleCpf: cd.techResponsibleCpf || c.techResponsibleCpf,
+          };
+        })
+      );
+
+      showToast(
+        `Ficha da empresa "${cd.companyName || activeCompany.companyName}" preenchida automaticamente pelo PDF!`
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao processar PDF.';
+      showToast(`Erro: ${msg}`);
+    } finally {
+      setIsSmartReadingBatch(false);
+    }
+  };
+
+  // ============================================================================
+  // OTHER HANDLERS
   // ============================================================================
 
   const handleCopyText = async (id: string, text: string, label: string) => {
-    const valueToCopy = text || activeCompany.cnpj;
+    const valueToCopy = text || onlyDigits(activeCompany.cnpj);
     try {
       await navigator.clipboard.writeText(valueToCopy);
       setCopiedId(id);
-      showToast(`${label} copiado: ${valueToCopy}`);
+      showToast(`${label} copiado para o Ctrl+V: ${valueToCopy}`);
       setTimeout(() => {
         setCopiedId((prev) => (prev === id ? null : prev));
-      }, 2000);
+      }, 2200);
     } catch {
       showToast('Não foi possível copiar automaticamente.');
     }
   };
 
-  // Commit inline edit with intelligent date calculation and optional link sync across all companies
+  const handleSmartEmitClick = async (doc: CertidaoDocument, comp: CompanyProfile) => {
+    const fieldMap = resolveCompanyFieldMap(comp);
+    const preferredKey: AutoFillFieldKey = doc.primaryAutoFillField || 'cnpj_num';
+    const chosenField = fieldMap[preferredKey] || fieldMap.cnpj_num;
+    const valueToCopy = chosenField.value || onlyDigits(comp.cnpj) || comp.cnpj;
+
+    try {
+      await navigator.clipboard.writeText(valueToCopy);
+      setCopiedId(`emit-${doc.id}`);
+    } catch {
+      // ignore
+    }
+
+    const targetUrl = buildAutoFillTargetUrl(doc.emitterUrl, comp);
+
+    setActiveEmissionSession({
+      doc,
+      company: comp,
+      copiedFieldLabel: chosenField.label,
+      copiedValue: valueToCopy,
+      targetUrl,
+    });
+
+    showToast(
+      `⚡ ${chosenField.label} (${valueToCopy}) já copiado! No site, basta Ctrl+V (ou usar o AutoPreencher) e digitar o Captcha.`
+    );
+  };
+
   const commitInlineEdit = () => {
     if (!inlineEdit) return;
     const { docId, field, value, syncAllCompanies } = inlineEdit;
@@ -958,7 +1888,6 @@ export default function App() {
 
     setDocuments((prev) =>
       prev.map((d) => {
-        // If editing emitterUrl and syncAllCompanies is true, update all docs with same name or templateKey
         if (
           field === 'emitterUrl' &&
           syncAllCompanies &&
@@ -974,7 +1903,12 @@ export default function App() {
 
         if (field === 'issueDate') {
           updated.issueDate = value;
-          if (value && updated.validityDays !== '' && Number(updated.validityDays) > 0 && !updated.isPermanent) {
+          if (
+            value &&
+            updated.validityDays !== '' &&
+            Number(updated.validityDays) > 0 &&
+            !updated.isPermanent
+          ) {
             updated.expirationDate = addDaysToDateString(value, Number(updated.validityDays));
           }
         } else if (field === 'validityDays') {
@@ -1008,8 +1942,12 @@ export default function App() {
     );
   };
 
-  // Update emitter link across all companies from Central de Links
-  const handleUpdatePortalLinkEverywhere = (doc: CertidaoDocument, newUrl: string, newIssuer?: string) => {
+  const handleUpdatePortalLinkEverywhere = (
+    doc: CertidaoDocument,
+    newUrl: string,
+    newIssuer?: string,
+    newPrimaryField?: AutoFillFieldKey
+  ) => {
     const cleanUrl = newUrl.trim();
     setDocuments((prev) =>
       prev.map((d) => {
@@ -1022,17 +1960,19 @@ export default function App() {
           ...d,
           emitterUrl: cleanUrl,
           issuer: newIssuer !== undefined ? newIssuer : d.issuer,
+          primaryAutoFillField:
+            newPrimaryField !== undefined ? newPrimaryField : d.primaryAutoFillField,
           updatedAt: new Date().toISOString(),
         };
       })
     );
-    showToast(`Link de "${doc.name}" salvo para todas as empresas!`);
+    showToast(`Configuração de emissão de "${doc.name}" salva para todas as empresas!`);
   };
 
-  // Open 1-Click Renewal Modal
   const openQuickRenew = (doc: CertidaoDocument) => {
     const today = getTodayDateString();
-    const defaultValidity = doc.validityDays !== '' && Number(doc.validityDays) > 0 ? Number(doc.validityDays) : 90;
+    const defaultValidity =
+      doc.validityDays !== '' && Number(doc.validityDays) > 0 ? Number(doc.validityDays) : 90;
     const nextExp = addDaysToDateString(today, defaultValidity);
     setRenewingDoc({
       doc,
@@ -1044,10 +1984,44 @@ export default function App() {
     });
   };
 
+  // When a user selects a PDF inside the Quick Renew modal, read its dates automatically too!
+  const handleRenewModalFileSelect = async (file: File | null) => {
+    if (!renewingDoc || !file) return;
+    setRenewingDoc((prev) => (prev ? { ...prev, newFile: file, extractedInfo: 'Lendo datas do PDF...' } : null));
+    try {
+      const dataUrl = await readFileAsDataURL(file);
+      const extracted = await analyzeDocumentViaServer(dataUrl, file.name, 'certificate');
+      if (extracted) {
+        setRenewingDoc((prev) => {
+          if (!prev) return null;
+          const issue = extracted.issueDate || prev.newIssueDate;
+          const valDays =
+            extracted.validityDays && extracted.validityDays > 0
+              ? extracted.validityDays
+              : prev.newValidityDays;
+          const exp =
+            extracted.expirationDate || addDaysToDateString(issue, valDays);
+          return {
+            ...prev,
+            newIssueDate: issue,
+            newValidityDays: valDays,
+            newExpirationDate: exp,
+            extractedInfo: `Datas extraídas do PDF! Emissão: ${formatDateBR(issue)} · Vencimento: ${formatDateBR(exp)}${extracted.controlCode ? ` · Código: ${extracted.controlCode}` : ''}`,
+          };
+        });
+      }
+    } catch {
+      setRenewingDoc((prev) =>
+        prev ? { ...prev, extractedInfo: 'Arquivo anexado (confira as datas acima).' } : null
+      );
+    }
+  };
+
   const confirmQuickRenew = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!renewingDoc) return;
-    const { doc, newIssueDate, newValidityDays, newExpirationDate, newDriveUrl, newFile } = renewingDoc;
+    const { doc, newIssueDate, newValidityDays, newExpirationDate, newDriveUrl, newFile } =
+      renewingDoc;
 
     let fileType = doc.fileType;
     let fileName = doc.fileName;
@@ -1086,10 +2060,10 @@ export default function App() {
       )
     );
     setRenewingDoc(null);
+    setActiveEmissionSession(null);
     showToast(`Certidão "${doc.name}" renovada até ${formatDateBR(newExpirationDate)}!`);
   };
 
-  // Open Full Create / Edit Document Modal
   const openCreateModal = () => {
     const today = getTodayDateString();
     const targetCompany = selectedCompanyId === 'all' ? companies[0] : activeCompany;
@@ -1102,6 +2076,8 @@ export default function App() {
       issuer: '',
       emitterUrl: '',
       registrationCode: targetCompany.cnpj,
+      primaryAutoFillField: 'cnpj_num',
+      portalFieldsHint: 'CNPJ (somente números) + Captcha',
       issueDate: today,
       validityDays: 90,
       expirationDate: addDaysToDateString(today, 90),
@@ -1117,45 +2093,6 @@ export default function App() {
     setEditingDoc({ ...doc });
   };
 
-  // Direct file upload from list row or modal
-  const handleAttachFileToDoc = async (docId: string, file: File) => {
-    try {
-      const dataUrl = await readFileAsDataURL(file);
-      await saveAttachmentData(docId, dataUrl);
-      setDocuments((prev) =>
-        prev.map((d) =>
-          d.id === docId
-            ? {
-                ...d,
-                fileType: 'local',
-                fileName: file.name,
-                fileMimeType: file.type || 'application/pdf',
-                fileSize: file.size,
-                updatedAt: new Date().toISOString(),
-              }
-            : d
-        )
-      );
-      if (editingDoc && editingDoc.id === docId) {
-        setEditingDoc((prev) =>
-          prev
-            ? {
-                ...prev,
-                fileType: 'local',
-                fileName: file.name,
-                fileMimeType: file.type || 'application/pdf',
-                fileSize: file.size,
-              }
-            : null
-        );
-      }
-      showToast(`Arquivo "${file.name}" anexado com sucesso!`);
-    } catch {
-      showToast('Erro ao salvar o arquivo anexo no navegador.');
-    }
-  };
-
-  // View PDF / Attachment
   const handleViewAttachment = async (doc: CertidaoDocument) => {
     if (doc.fileType === 'drive' && doc.driveUrl) {
       setPreviewModal({ doc, dataUrl: null });
@@ -1169,7 +2106,6 @@ export default function App() {
     openEditModal(doc);
   };
 
-  // Download PDF / Attachment
   const handleDownloadAttachment = async (doc: CertidaoDocument) => {
     if (doc.fileType === 'local') {
       const dataUrl = await getAttachmentData(doc.id);
@@ -1189,7 +2125,6 @@ export default function App() {
     }
   };
 
-  // Delete Document
   const confirmDeleteDocument = async () => {
     if (!deleteConfirmId) return;
     await deleteAttachmentData(deleteConfirmId);
@@ -1198,7 +2133,6 @@ export default function App() {
     showToast('Documento removido.');
   };
 
-  // Save or Create Company (with automatic 23 Piauí certificates generation)
   const handleSaveCompany = (e: React.FormEvent) => {
     e.preventDefault();
     if (!companyModal) return;
@@ -1209,26 +2143,36 @@ export default function App() {
       setCompanies((prev) => [...prev, profile]);
       if (cloneStandardDocs) {
         const newDocs = buildInitialDocumentsForCompany(profile, false).map((nd) => {
-          // Inherit any customized emitterUrl that the user already edited in existing docs!
           const existingWithSameKey = documents.find(
             (ed) => ed.templateKey && ed.templateKey === nd.templateKey && ed.emitterUrl
           );
           return existingWithSameKey
-            ? { ...nd, emitterUrl: existingWithSameKey.emitterUrl, issuer: existingWithSameKey.issuer }
+            ? {
+                ...nd,
+                emitterUrl: existingWithSameKey.emitterUrl,
+                issuer: existingWithSameKey.issuer,
+                primaryAutoFillField:
+                  existingWithSameKey.primaryAutoFillField || nd.primaryAutoFillField,
+              }
             : nd;
         });
         setDocuments((prev) => [...prev, ...newDocs]);
       }
       setSelectedCompanyId(profile.id);
-      showToast(`Empresa "${profile.companyName}" criada e selecionada!`);
+      showToast(`Empresa "${profile.companyName}" cadastrada com banco de dados completo!`);
     } else {
       setCompanies((prev) => prev.map((c) => (c.id === profile.id ? profile : c)));
-      showToast(`Dados da empresa "${profile.companyName}" atualizados!`);
+      showToast(`Banco de dados da empresa "${profile.companyName}" atualizado!`);
     }
     setCompanyModal(null);
   };
 
-  // Delete Company
+  const updateActiveCompanyField = (field: keyof CompanyProfile, value: string) => {
+    setCompanies((prev) =>
+      prev.map((c) => (c.id === activeCompany.id ? { ...c, [field]: value } : c))
+    );
+  };
+
   const handleDeleteCompany = (companyId: string) => {
     if (companies.length <= 1) {
       showToast('Mantenha pelo menos uma empresa cadastrada.');
@@ -1243,7 +2187,6 @@ export default function App() {
     showToast('Empresa e documentos vinculados removidos.');
   };
 
-  // Export Backup JSON
   const handleExportJSON = async () => {
     const attachments = await getAllAttachmentsMap();
     const payload = {
@@ -1266,7 +2209,6 @@ export default function App() {
     showToast('Backup completo JSON exportado com sucesso!');
   };
 
-  // Export CSV / Excel
   const handleExportCSV = () => {
     const headers = [
       'Empresa',
@@ -1279,7 +2221,7 @@ export default function App() {
       'Data de Emissão',
       'Prazo (Dias)',
       'Data de Vencimento',
-      'CNPJ / Inscrição Vinculada',
+      'Dado Principal AutoPreenchimento',
       'Link do Site Emissor',
       'Arquivo Anexo / Nuvem',
       'Observações',
@@ -1295,10 +2237,18 @@ export default function App() {
       ev.countdownText,
       doc.issueDate ? formatDateBR(doc.issueDate) : '',
       doc.isPermanent ? 'Permanente' : String(doc.validityDays || ''),
-      doc.isPermanent ? 'Indeterminado' : doc.expirationDate ? formatDateBR(doc.expirationDate) : '',
-      doc.registrationCode,
+      doc.isPermanent
+        ? 'Indeterminado'
+        : doc.expirationDate
+        ? formatDateBR(doc.expirationDate)
+        : '',
+      doc.primaryAutoFillField || 'cnpj_num',
       doc.emitterUrl,
-      doc.fileType === 'local' ? doc.fileName || 'PDF Local' : doc.fileType === 'drive' ? doc.driveUrl || '' : 'Sem anexo',
+      doc.fileType === 'local'
+        ? doc.fileName || 'PDF Local'
+        : doc.fileType === 'drive'
+        ? doc.driveUrl || ''
+        : 'Sem anexo',
       doc.notes,
     ]);
 
@@ -1320,7 +2270,6 @@ export default function App() {
     showToast('Planilha CSV/Excel exportada com sucesso!');
   };
 
-  // Import Backup JSON
   const handleImportJSON = async (file: File) => {
     try {
       const text = await file.text();
@@ -1350,7 +2299,6 @@ export default function App() {
     }
   };
 
-  // Restore Initial Data
   const handleResetToInitialData = () => {
     setCompanies(INITIAL_COMPANIES);
     setSelectedCompanyId(INITIAL_COMPANIES[0].id);
@@ -1358,6 +2306,16 @@ export default function App() {
     setResetConfirmOpen(false);
     showToast('Dados padrão do Piauí restaurados.');
   };
+
+  const activeCompanyFieldMap = useMemo(
+    () => resolveCompanyFieldMap(activeCompany),
+    [activeCompany]
+  );
+
+  const bookmarkletHref = useMemo(
+    () => generateBookmarkletCode(activeCompany),
+    [activeCompany]
+  );
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 transition-colors duration-150">
@@ -1390,6 +2348,17 @@ export default function App() {
           </button>
           <button
             type="button"
+            onClick={() => setActiveSection('company_db')}
+            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
+              activeSection === 'company_db'
+                ? 'border-blue-600 text-slate-900 dark:text-white dark:border-blue-400'
+                : 'border-transparent hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            Banco de Dados das Empresas ({companies.length})
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveSection('links')}
             className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
               activeSection === 'links'
@@ -1397,18 +2366,7 @@ export default function App() {
                 : 'border-transparent hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            Gerenciar Links (PI)
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveSection('companies')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
-              activeSection === 'companies'
-                ? 'border-blue-600 text-slate-900 dark:text-white dark:border-blue-400'
-                : 'border-transparent hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            Empresas ({companies.length})
+            Links & AutoPreenchimento
           </button>
           <button
             type="button"
@@ -1436,180 +2394,355 @@ export default function App() {
       </header>
 
       {/* ====================================================================
-          BARRA DE SELEÇÃO DE EMPRESA (PIAUÍ) + COPIAR CNPJ + CONTROLES
+          BARRA DE SELEÇÃO DE EMPRESA + LEITOR INTELIGENTE DE PDF + DADOS RÁPIDOS
       ==================================================================== */}
       <div className="border-b border-slate-200 dark:border-slate-800 bg-slate-100/90 dark:bg-slate-900/70">
-        <div className="max-w-[1440px] mx-auto px-6 py-3 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          {/* Left: Company Filter Selector + Quick Copy */}
-          <div className="flex flex-wrap items-center gap-2.5">
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300">
-              <Building2 className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
-              <span>Empresa:</span>
+        <div className="max-w-[1440px] mx-auto px-6 py-3 space-y-2.5">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            {/* Left: Company Filter Selector */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300">
+                <Building2 className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+                <span>Empresa Ativa:</span>
+              </div>
+
+              <select
+                value={selectedCompanyId}
+                onChange={(e) => setSelectedCompanyId(e.target.value)}
+                className="px-3 py-1.5 text-xs font-semibold bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:border-blue-600 cursor-pointer"
+              >
+                {companies.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.companyName} — CNPJ: {c.cnpj}
+                  </option>
+                ))}
+                <option value="all">Ver Todas as Empresas Juntas ({companies.length})</option>
+              </select>
+
+              {/* Botão Leitor Inteligente de PDF em Lote / Avulso */}
+              <input
+                ref={smartPdfInputRef}
+                type="file"
+                accept=".pdf,image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  handleSmartUploadAndMatch(e.target.files);
+                  e.target.value = '';
+                }}
+              />
+              <button
+                type="button"
+                disabled={isSmartReadingBatch}
+                onClick={() => smartPdfInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-60"
+                title="Envie 1 ou mais PDFs de certidões ou Cartão CNPJ: o programa lê as datas, identifica a certidão e preenche os dados da empresa sozinho!"
+              >
+                {isSmartReadingBatch ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <FileScan className="w-3.5 h-3.5" />
+                )}
+                {isSmartReadingBatch
+                  ? 'Lendo PDF...'
+                  : 'Ler PDF (Extrair Datas e Dados Automaticamente)'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveSection('company_db')}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/70 border border-blue-200 dark:border-blue-800 rounded-lg hover:bg-blue-100 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Database className="w-3.5 h-3.5" />
+                Ficha da Empresa
+              </button>
             </div>
 
-            <select
-              value={selectedCompanyId}
-              onChange={(e) => setSelectedCompanyId(e.target.value)}
-              className="px-3 py-1.5 text-xs font-semibold bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:border-blue-600 cursor-pointer"
-            >
-              {companies.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.companyName} — CNPJ: {c.cnpj}
-                </option>
-              ))}
-              <option value="all">📋 Ver Todas as Empresas Juntas ({companies.length})</option>
-            </select>
+            {/* Right: Automation Script + Alert Threshold + Theme Toggle */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowTampermonkeyModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-800 dark:text-amber-300 bg-amber-100/80 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 rounded-lg hover:bg-amber-200/70 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Zap className="w-3.5 h-3.5" />
+                AutoPreenchimento nos Sites
+              </button>
 
-            {selectedCompanyId !== 'all' && (
-              <>
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleCopyText('bar-cnpj', activeCompany.cnpj, `CNPJ (${activeCompany.companyName})`)
-                  }
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-mono tabular-nums font-medium text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/70 border border-blue-200 dark:border-blue-800/80 rounded-lg hover:bg-blue-100 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                  title="Copiar CNPJ da empresa selecionada"
-                >
-                  {copiedId === 'bar-cnpj' ? (
-                    <Check className="w-3.5 h-3.5 text-emerald-500" />
-                  ) : (
-                    <Copy className="w-3.5 h-3.5" />
-                  )}
-                  {copiedId === 'bar-cnpj' ? 'CNPJ Copiado!' : `Copiar CNPJ: ${activeCompany.cnpj}`}
-                </button>
+              <div className="hidden sm:flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400">
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                <span>Alerta:</span>
+                <div className="flex items-center bg-slate-200/80 dark:bg-slate-800 p-0.5 rounded-md">
+                  {[15, 30, 45].map((days) => (
+                    <button
+                      key={days}
+                      type="button"
+                      onClick={() => {
+                        setWarningThresholdDays(days);
+                        showToast(`Alerta amarelo ajustado para ${days} dias.`);
+                      }}
+                      className={`px-2 py-0.5 text-xs font-mono tabular-nums rounded cursor-pointer ${
+                        warningThresholdDays === days
+                          ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white font-semibold'
+                          : 'text-slate-600 dark:text-slate-400'
+                      }`}
+                    >
+                      {days}d
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-                <button
-                  type="button"
-                  onClick={() =>
-                    setCompanyModal({
-                      isNew: false,
-                      profile: { ...activeCompany },
-                      cloneStandardDocs: false,
-                    })
-                  }
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer whitespace-nowrap shrink-0"
-                  title="Editar nome, CNPJ ou inscrições desta empresa"
-                >
-                  <Edit3 className="w-3.5 h-3.5" />
-                  Editar Empresa
-                </button>
-              </>
-            )}
+              <button
+                type="button"
+                onClick={() => setDarkMode((d) => !d)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                {darkMode ? (
+                  <Sun className="w-3.5 h-3.5 text-amber-400" />
+                ) : (
+                  <Moon className="w-3.5 h-3.5 text-slate-700" />
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* BARRA RÁPIDA DE DADOS DA EMPRESA ATIVA */}
+          <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-200/70 dark:border-slate-800/80 text-xs">
+            <span className="text-slate-500 dark:text-slate-400 font-medium mr-1">
+              Dados Rápidos ({activeCompany.companyName}):
+            </span>
 
             <button
               type="button"
               onClick={() =>
-                setCompanyModal({
-                  isNew: true,
-                  profile: {
-                    id: `comp-${Date.now()}`,
-                    companyName: '',
-                    cnpj: '',
-                    stateRegistration: '',
-                    municipalRegistration: '',
-                    cityState: 'Teresina - PI',
-                  },
-                  cloneStandardDocs: true,
-                })
+                handleCopyText(
+                  'quick-cnpj-num',
+                  onlyDigits(activeCompany.cnpj),
+                  'CNPJ (Só Números)'
+                )
               }
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/80 rounded-lg hover:bg-emerald-100 cursor-pointer whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1 px-2 py-1 font-mono tabular-nums bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded hover:border-blue-500 transition-colors cursor-pointer"
             >
-              <Plus className="w-3.5 h-3.5" />
-              + Cadastrar Empresa (PI)
-            </button>
-          </div>
-
-          {/* Right: Quick Nav (mobile) + Alert Threshold + Theme Toggle */}
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex md:hidden items-center gap-1 bg-slate-200/80 dark:bg-slate-800 p-1 rounded-lg">
-              <button
-                type="button"
-                onClick={() => setActiveSection('dashboard')}
-                className={`px-2 py-1 text-xs font-medium rounded ${
-                  activeSection === 'dashboard' ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white' : ''
-                }`}
-              >
-                Lista
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveSection('links')}
-                className={`px-2 py-1 text-xs font-medium rounded ${
-                  activeSection === 'links' ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white' : ''
-                }`}
-              >
-                Links
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveSection('companies')}
-                className={`px-2 py-1 text-xs font-medium rounded ${
-                  activeSection === 'companies' ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white' : ''
-                }`}
-              >
-                Empresas
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveSection('backup')}
-                className={`px-2 py-1 text-xs font-medium rounded ${
-                  activeSection === 'backup' ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white' : ''
-                }`}
-              >
-                Backup
-              </button>
-            </div>
-
-            <div className="hidden sm:flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400">
-              <SlidersHorizontal className="w-3.5 h-3.5" />
-              <span>Alerta:</span>
-              <div className="flex items-center bg-slate-200/80 dark:bg-slate-800 p-0.5 rounded-md">
-                {[15, 30, 45].map((days) => (
-                  <button
-                    key={days}
-                    type="button"
-                    onClick={() => {
-                      setWarningThresholdDays(days);
-                      showToast(`Alerta amarelo ajustado para ${days} dias.`);
-                    }}
-                    className={`px-2 py-0.5 text-xs font-mono tabular-nums rounded cursor-pointer ${
-                      warningThresholdDays === days
-                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white font-semibold'
-                        : 'text-slate-600 dark:text-slate-400'
-                    }`}
-                  >
-                    {days}d
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setActiveSection('links')}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer whitespace-nowrap shrink-0"
-              title="Conferir ou editar todos os links de emissão"
-            >
-              <Link2 className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-              <span>Editar Todos os Links</span>
+              {copiedId === 'quick-cnpj-num' ? (
+                <Check className="w-3 h-3 text-emerald-500" />
+              ) : (
+                <Copy className="w-3 h-3 text-blue-500" />
+              )}
+              <span>CNPJ limpo: {onlyDigits(activeCompany.cnpj)}</span>
             </button>
 
             <button
               type="button"
-              onClick={() => setDarkMode((d) => !d)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer whitespace-nowrap shrink-0"
+              onClick={() =>
+                handleCopyText('quick-cnpj-fmt', activeCompany.cnpj, 'CNPJ Formatado')
+              }
+              className="inline-flex items-center gap-1 px-2 py-1 font-mono tabular-nums bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded hover:border-blue-500 transition-colors cursor-pointer"
             >
-              {darkMode ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-slate-700" />}
+              {copiedId === 'quick-cnpj-fmt' ? (
+                <Check className="w-3 h-3 text-emerald-500" />
+              ) : (
+                <Copy className="w-3 h-3 text-slate-400" />
+              )}
+              <span>CNPJ: {activeCompany.cnpj}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                handleCopyText(
+                  'quick-ie',
+                  onlyDigits(activeCompany.stateRegistration),
+                  'IE (SEFAZ-PI)'
+                )
+              }
+              className="inline-flex items-center gap-1 px-2 py-1 font-mono tabular-nums bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded hover:border-blue-500 transition-colors cursor-pointer"
+            >
+              {copiedId === 'quick-ie' ? (
+                <Check className="w-3 h-3 text-emerald-500" />
+              ) : (
+                <Copy className="w-3 h-3 text-slate-400" />
+              )}
+              <span>IE: {activeCompany.stateRegistration || '—'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                handleCopyText(
+                  'quick-im',
+                  onlyDigits(activeCompany.municipalRegistration),
+                  'IM (Prefeitura)'
+                )
+              }
+              className="inline-flex items-center gap-1 px-2 py-1 font-mono tabular-nums bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded hover:border-blue-500 transition-colors cursor-pointer"
+            >
+              {copiedId === 'quick-im' ? (
+                <Check className="w-3 h-3 text-emerald-500" />
+              ) : (
+                <Copy className="w-3 h-3 text-slate-400" />
+              )}
+              <span>IM: {activeCompany.municipalRegistration || '—'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                handleCopyText(
+                  'quick-cpf',
+                  onlyDigits(activeCompany.partnerCpf),
+                  'CPF do Sócio'
+                )
+              }
+              className="inline-flex items-center gap-1 px-2 py-1 font-mono tabular-nums bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded hover:border-blue-500 transition-colors cursor-pointer"
+            >
+              {copiedId === 'quick-cpf' ? (
+                <Check className="w-3 h-3 text-emerald-500" />
+              ) : (
+                <Copy className="w-3 h-3 text-slate-400" />
+              )}
+              <span>CPF Sócio: {activeCompany.partnerCpf || '—'}</span>
             </button>
           </div>
         </div>
       </div>
 
       {/* ====================================================================
+          BANNER DE CONFIRMAÇÃO DE LEITURA AUTOMÁTICA DO PDF (Quando um PDF é lido)
+      ==================================================================== */}
+      {lastExtractionSummary && (
+        <div className="bg-emerald-950 text-white border-b border-emerald-800">
+          <div className="max-w-[1440px] mx-auto px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <FileScan className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span className="font-bold text-emerald-300">PDF Lido Automaticamente:</span>
+              <span className="font-semibold">{lastExtractionSummary.documentTitle}</span>
+              <span className="text-emerald-400">·</span>
+              <span>Empresa: {lastExtractionSummary.companyName}</span>
+              <span className="text-emerald-400">·</span>
+              <span className="font-mono">
+                Emissão: {formatDateBR(lastExtractionSummary.issueDate)} | Vencimento:{' '}
+                {formatDateBR(lastExtractionSummary.expirationDate)}
+              </span>
+              {lastExtractionSummary.controlCode !== '—' && (
+                <>
+                  <span className="text-emerald-400">·</span>
+                  <span className="font-mono">Controle: {lastExtractionSummary.controlCode}</span>
+                </>
+              )}
+              {lastExtractionSummary.fieldsUpdatedInCompany.length > 0 && (
+                <span className="text-amber-300 font-medium">
+                  (+ Atualizado na Ficha da Empresa:{' '}
+                  {lastExtractionSummary.fieldsUpdatedInCompany.join(', ')})
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setLastExtractionSummary(null)}
+              className="p-1 text-emerald-300 hover:text-white cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          PAINEL ASSISTENTE DE EMISSÃO ATIVA (Aparece ao clicar em "⚡ Emitir")
+      ==================================================================== */}
+      {activeEmissionSession && (
+        <div className="bg-blue-950 text-white border-b border-blue-800 shadow-lg">
+          <div className="max-w-[1440px] mx-auto px-6 py-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-semibold text-amber-300 flex items-center gap-1">
+                  <Zap className="w-3.5 h-3.5" />
+                  Modo Emissão Assistida Ativo:
+                </span>
+                <span className="font-bold text-white">{activeEmissionSession.doc.name}</span>
+                <span className="text-blue-300">·</span>
+                <span className="text-blue-200">
+                  Empresa: <strong>{activeEmissionSession.company.companyName}</strong>
+                </span>
+              </div>
+              <div className="text-xs text-blue-200">
+                <span className="text-emerald-300 font-semibold">
+                  ✓ {activeEmissionSession.copiedFieldLabel} (
+                  <span className="font-mono">{activeEmissionSession.copiedValue}</span>) já está no
+                  seu Ctrl+V!
+                </span>{' '}
+                · Assim que baixar o PDF do site, basta anexar ao lado que o sistema lê a validade sozinho!
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              {(
+                [
+                  ['cnpj_num', 'CNPJ (Limpo)'],
+                  ['ie_num', 'IE (SEFAZ-PI)'],
+                  ['im_num', 'IM (Prefeitura)'],
+                  ['cpf_num', 'CPF Sócio'],
+                  ['email', 'E-mail'],
+                ] as [AutoFillFieldKey, string][]
+              ).map(([key, shortLabel]) => {
+                const map = resolveCompanyFieldMap(activeEmissionSession.company);
+                const val = map[key].value;
+                if (!val) return null;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => handleCopyText(`assist-${key}`, val, map[key].label)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-mono bg-blue-900/90 hover:bg-blue-800 border border-blue-700 rounded-lg text-white cursor-pointer"
+                  >
+                    {copiedId === `assist-${key}` ? (
+                      <Check className="w-3 h-3 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3 h-3 text-blue-300" />
+                    )}
+                    <span>
+                      {shortLabel}: {val.slice(0, 16)}
+                    </span>
+                  </button>
+                );
+              })}
+
+              <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg cursor-pointer whitespace-nowrap">
+                <FileScan className="w-3.5 h-3.5" />
+                Já Emiti! Anexar e Ler PDF Automaticamente
+                <input
+                  type="file"
+                  accept=".pdf,image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      handleAttachFileToDoc(activeEmissionSession.doc.id, f);
+                      setActiveEmissionSession(null);
+                    }
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+
+              <button
+                type="button"
+                onClick={() => setActiveEmissionSession(null)}
+                className="p-1.5 text-blue-300 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
           MAIN VIEWPORT
       ==================================================================== */}
       <main className="flex-1 max-w-[1440px] w-full mx-auto px-6 py-5 space-y-5">
-        {/* RESUMO EXECUTIVO COMPACTO (Clicável para Filtrar) */}
+        {/* RESUMO EXECUTIVO COMPACTO */}
         <section aria-label="Resumo de Status">
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
             <button
@@ -1728,7 +2861,7 @@ export default function App() {
         </section>
 
         {/* ====================================================================
-            VIEW 1: LISTA COMPACTA E DIRETA DE CERTIDÕES
+            VIEW 1: LISTA COMPACTA DE CERTIDÕES COM LEITURA AUTOMÁTICA DE PDF
         ==================================================================== */}
         {activeSection === 'dashboard' && (
           <section className="space-y-3">
@@ -1740,7 +2873,7 @@ export default function App() {
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Filtrar lista por nome da certidão, SEFAZ-PI, JUCEPI, TJPI, Prefeitura, CNPJ..."
+                  placeholder="Filtrar lista por certidão, órgão (SEFAZ-PI, JUCEPI, TJPI, Prefeitura), CNPJ..."
                   className="w-full pl-9 pr-8 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-blue-600"
                 />
                 {searchQuery && (
@@ -1791,7 +2924,9 @@ export default function App() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setCategoryFilter('Societário, Contábil e Qualificação Técnica')}
+                    onClick={() =>
+                      setCategoryFilter('Societário, Contábil e Qualificação Técnica')
+                    }
                     className={`px-2.5 py-1 text-xs font-medium rounded transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                       categoryFilter === 'Societário, Contábil e Qualificação Técnica'
                         ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
@@ -1818,9 +2953,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* ================================================================
-                LISTA EM LINHAS COMPACTAS (List View)
-            ================================================================ */}
+            {/* LISTA EM LINHAS COMPACTAS */}
             <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-200/80 dark:divide-slate-800">
               {filteredDocuments.length === 0 ? (
                 <div className="p-10 text-center space-y-3">
@@ -1847,6 +2980,9 @@ export default function App() {
                   const isVigente = ev.status === 'vigente';
                   const isEditingThisUrl =
                     inlineEdit?.docId === doc.id && inlineEdit.field === 'emitterUrl';
+                  const isAnalyzingThis = analyzingDocId === doc.id;
+                  const compForDoc = docCompany || activeCompany;
+                  const targetAutoUrl = buildAutoFillTargetUrl(doc.emitterUrl, compForDoc);
 
                   return (
                     <div
@@ -1866,7 +3002,7 @@ export default function App() {
                             {String(index + 1).padStart(2, '0')}.
                           </span>
 
-                          {/* Status Badge Icon + Countdown */}
+                          {/* Status Icon + Countdown */}
                           <div className="w-[130px] shrink-0 flex items-center gap-1.5">
                             {isVencido && (
                               <AlertOctagon className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
@@ -1900,7 +3036,7 @@ export default function App() {
                             </div>
                           </div>
 
-                          {/* Nome da Certidão & Metadados em Linha */}
+                          {/* Nome da Certidão & Metadados */}
                           <div className="min-w-0 flex-1">
                             {inlineEdit?.docId === doc.id && inlineEdit.field === 'name' ? (
                               <input
@@ -1918,18 +3054,15 @@ export default function App() {
                                 className="w-full px-2 py-0.5 text-sm font-semibold bg-white dark:bg-slate-950 border border-blue-600 rounded text-slate-900 dark:text-white"
                               />
                             ) : (
-                              <div className="flex flex-wrap items-baseline gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setInlineEdit({ docId: doc.id, field: 'name', value: doc.name })
-                                  }
-                                  className="text-left text-sm font-semibold text-slate-900 dark:text-slate-100 hover:text-blue-600 dark:hover:text-blue-400 cursor-pointer"
-                                  title="Clique para editar o nome da certidão"
-                                >
-                                  {doc.name}
-                                </button>
-                              </div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setInlineEdit({ docId: doc.id, field: 'name', value: doc.name })
+                                }
+                                className="text-left text-sm font-semibold text-slate-900 dark:text-slate-100 hover:text-blue-600 dark:hover:text-blue-400 cursor-pointer"
+                              >
+                                {doc.name}
+                              </button>
                             )}
 
                             <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 mt-0.5">
@@ -1941,26 +3074,11 @@ export default function App() {
                                   <span aria-hidden="true">·</span>
                                 </>
                               )}
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setInlineEdit({
-                                    docId: doc.id,
-                                    field: 'issuer',
-                                    value: doc.issuer,
-                                  })
-                                }
-                                className="hover:text-slate-900 dark:hover:text-white cursor-pointer"
-                                title="Clique para editar o órgão emissor"
-                              >
-                                {doc.issuer || 'Definir órgão'}
-                              </button>
-                              <span aria-hidden="true">·</span>
-                              <span>{doc.category}</span>
+                              <span>{doc.issuer || 'Definir órgão'}</span>
                               {doc.notes && (
                                 <>
                                   <span aria-hidden="true">·</span>
-                                  <span className="text-slate-400 dark:text-slate-500 truncate max-w-xs" title={doc.notes}>
+                                  <span className="text-slate-400 dark:text-slate-500 truncate max-w-md" title={doc.notes}>
                                     {doc.notes}
                                   </span>
                                 </>
@@ -1969,11 +3087,10 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* COLUNA 2: Datas em Linha + Botões de Portal/Editar Link + PDF + Renovar */}
-                        <div className="flex flex-wrap items-center justify-between xl:justify-end gap-2 sm:gap-3 pt-2 xl:pt-0 border-t xl:border-t-0 border-slate-100 dark:border-slate-800/70">
-                          {/* Bloco de Datas Compacto (Emissão | Prazo | Vencimento) */}
+                        {/* COLUNA 2: Datas Compactas + ⚡ Emitir Auto + Anexar/Ler PDF + Renovar */}
+                        <div className="flex flex-wrap items-center justify-between xl:justify-end gap-2 sm:gap-2.5 pt-2 xl:pt-0 border-t xl:border-t-0 border-slate-100 dark:border-slate-800/70">
+                          {/* Bloco de Datas (Emissão | Prazo | Vencimento) */}
                           <div className="flex items-center gap-3 bg-slate-50 dark:bg-slate-950/90 px-3 py-1.5 rounded-lg border border-slate-200/80 dark:border-slate-800 text-xs">
-                            {/* Emissão */}
                             <div>
                               <span className="text-[10px] text-slate-400 block leading-none">
                                 Emissão
@@ -2004,7 +3121,6 @@ export default function App() {
                                     })
                                   }
                                   className="font-mono tabular-nums text-slate-700 dark:text-slate-300 hover:text-blue-600 cursor-pointer mt-0.5 block"
-                                  title="Clique para editar Data de Emissão"
                                 >
                                   {doc.issueDate ? formatDateBR(doc.issueDate) : 'Definir'}
                                 </button>
@@ -2013,7 +3129,6 @@ export default function App() {
 
                             <span className="text-slate-300 dark:text-slate-700">/</span>
 
-                            {/* Prazo */}
                             <div className="text-center">
                               <span className="text-[10px] text-slate-400 block leading-none">
                                 Prazo
@@ -2048,7 +3163,6 @@ export default function App() {
                                     })
                                   }
                                   className="font-mono tabular-nums text-slate-700 dark:text-slate-300 hover:text-blue-600 cursor-pointer mt-0.5 block"
-                                  title="Clique para alterar o prazo em dias"
                                 >
                                   {doc.validityDays ? `${doc.validityDays}d` : '—'}
                                 </button>
@@ -2057,7 +3171,6 @@ export default function App() {
 
                             <span className="text-slate-300 dark:text-slate-700">/</span>
 
-                            {/* Vencimento */}
                             <div>
                               <span className="text-[10px] text-slate-400 block leading-none">
                                 Vencimento
@@ -2099,7 +3212,6 @@ export default function App() {
                                       ? 'text-amber-700 dark:text-amber-400 hover:underline'
                                       : 'text-slate-900 dark:text-white hover:text-blue-600'
                                   }`}
-                                  title="Clique para editar Data de Vencimento"
                                 >
                                   {doc.expirationDate
                                     ? formatDateBR(doc.expirationDate)
@@ -2109,18 +3221,19 @@ export default function App() {
                             </div>
                           </div>
 
-                          {/* Bloco Site Emissor + Editar Link Rápido + Copiar CNPJ */}
+                          {/* Bloco ⚡ EMITIR AUTO + Editar Link */}
                           <div className="flex items-center gap-1">
                             {doc.emitterUrl ? (
                               <a
-                                href={doc.emitterUrl}
+                                href={targetAutoUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/70 rounded-lg transition-colors whitespace-nowrap shrink-0"
-                                title={`Abrir site emissor: ${doc.emitterUrl}`}
+                                onClick={() => handleSmartEmitClick(doc, compForDoc)}
+                                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-blue-700 dark:text-blue-200 bg-blue-50 dark:bg-blue-950/70 hover:bg-blue-100 dark:hover:bg-blue-900 border border-blue-200 dark:border-blue-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
                               >
-                                <ExternalLink className="w-3.5 h-3.5" />
-                                Emitir
+                                <Zap className="w-3.5 h-3.5 text-amber-500" />
+                                Emitir Auto
+                                <ExternalLink className="w-3 h-3 opacity-70" />
                               </a>
                             ) : (
                               <button
@@ -2157,50 +3270,31 @@ export default function App() {
                               className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
                                 isEditingThisUrl
                                   ? 'bg-blue-600 text-white border-blue-600'
-                                  : 'text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 bg-slate-50 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700'
+                                  : 'text-slate-500 dark:text-slate-400 hover:text-blue-600 bg-slate-50 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700'
                               }`}
-                              title="Editar link do site emissor diretamente na lista"
+                              title="Editar link do site emissor"
                             >
                               <Link2 className="w-3.5 h-3.5" />
                             </button>
-
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleCopyText(
-                                  doc.id,
-                                  doc.registrationCode || docCompany?.cnpj || activeCompany.cnpj,
-                                  'CNPJ'
-                                )
-                              }
-                              className="inline-flex items-center gap-1 px-2 py-1.5 text-xs font-mono tabular-nums text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                              title={`Copiar CNPJ/Inscrição: ${
-                                doc.registrationCode || docCompany?.cnpj || activeCompany.cnpj
-                              }`}
-                            >
-                              {copiedId === doc.id ? (
-                                <Check className="w-3.5 h-3.5 text-emerald-500" />
-                              ) : (
-                                <Copy className="w-3.5 h-3.5" />
-                              )}
-                              <span className="hidden sm:inline">
-                                {copiedId === doc.id ? 'Copiado' : 'CNPJ'}
-                              </span>
-                            </button>
                           </div>
 
-                          {/* Bloco PDF (Ver / Baixar / Anexar) */}
+                          {/* Bloco PDF (Anexar e Ler Automaticamente / Visualizar / Baixar) */}
                           <div className="flex items-center gap-1">
-                            {doc.fileType !== 'none' ? (
+                            {isAnalyzingThis ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 rounded-lg whitespace-nowrap">
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                Lendo PDF...
+                              </span>
+                            ) : doc.fileType !== 'none' ? (
                               <>
                                 <button
                                   type="button"
                                   onClick={() => handleViewAttachment(doc)}
                                   className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 rounded-lg cursor-pointer whitespace-nowrap shrink-0"
-                                  title="Visualizar PDF/Anexo"
+                                  title="Visualizar PDF anexado"
                                 >
                                   <Eye className="w-3.5 h-3.5" />
-                                  PDF
+                                  Ver PDF
                                 </button>
                                 {doc.fileType === 'local' && (
                                   <button
@@ -2212,11 +3306,30 @@ export default function App() {
                                     <Download className="w-3.5 h-3.5" />
                                   </button>
                                 )}
+                                <label
+                                  className="p-1.5 text-slate-500 hover:text-emerald-600 bg-slate-100 dark:bg-slate-800 rounded-lg cursor-pointer"
+                                  title="Anexar novo PDF e ler datas automaticamente"
+                                >
+                                  <Upload className="w-3.5 h-3.5" />
+                                  <input
+                                    type="file"
+                                    accept=".pdf,image/*"
+                                    className="hidden"
+                                    onChange={(e) => {
+                                      const f = e.target.files?.[0];
+                                      if (f) handleAttachFileToDoc(doc.id, f);
+                                      e.target.value = '';
+                                    }}
+                                  />
+                                </label>
                               </>
                             ) : (
-                              <label className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-lg cursor-pointer whitespace-nowrap shrink-0">
+                              <label
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-600 hover:text-white rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                                title="Anexar PDF: o sistema lê a Data de Emissão e Vencimento sozinho!"
+                              >
                                 <Upload className="w-3.5 h-3.5" />
-                                PDF
+                                Anexar PDF
                                 <input
                                   type="file"
                                   accept=".pdf,image/*"
@@ -2237,7 +3350,6 @@ export default function App() {
                               type="button"
                               onClick={() => openQuickRenew(doc)}
                               className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                              title="Renovar certidão em 1 clique"
                             >
                               <RefreshCw className="w-3.5 h-3.5" />
                               Renovar
@@ -2246,7 +3358,7 @@ export default function App() {
                               type="button"
                               onClick={() => openEditModal(doc)}
                               className="p-1.5 text-slate-500 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 rounded-lg cursor-pointer"
-                              title="Abrir edição completa"
+                              title="Editar detalhes"
                             >
                               <Edit3 className="w-3.5 h-3.5" />
                             </button>
@@ -2254,7 +3366,7 @@ export default function App() {
                               type="button"
                               onClick={() => setDeleteConfirmId(doc.id)}
                               className="p-1.5 text-slate-400 hover:text-red-600 bg-slate-100 dark:bg-slate-800 rounded-lg cursor-pointer"
-                              title="Excluir certidão"
+                              title="Excluir"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -2262,11 +3374,11 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* BARRA EXPANSÍVEL INLINE PARA EDITAR O LINK DO SITE EMISSOR NA HORA */}
+                      {/* BARRA INLINE PARA EDITAR O LINK DO SITE EMISSOR */}
                       {isEditingThisUrl && (
                         <div className="mt-2.5 pt-2.5 border-t border-slate-200/80 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center gap-2 bg-blue-50/40 dark:bg-blue-950/20 p-2.5 rounded-lg">
                           <span className="text-xs font-semibold text-blue-700 dark:text-blue-300 whitespace-nowrap">
-                            Link para Emissão:
+                            Link do Site:
                           </span>
                           <input
                             type="url"
@@ -2279,7 +3391,7 @@ export default function App() {
                               if (e.key === 'Enter') commitInlineEdit();
                               if (e.key === 'Escape') setInlineEdit(null);
                             }}
-                            placeholder="Cole aqui o link correto do site emissor (https://...)"
+                            placeholder="https://..."
                             className="flex-1 px-3 py-1.5 text-xs font-mono bg-white dark:bg-slate-900 border border-blue-500 rounded-lg text-slate-900 dark:text-white focus:outline-none"
                           />
                           <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap cursor-pointer">
@@ -2307,7 +3419,7 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => setInlineEdit(null)}
-                              className="px-2.5 py-1.5 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 cursor-pointer"
+                              className="px-2.5 py-1.5 text-xs text-slate-600 dark:text-slate-400 cursor-pointer"
                             >
                               Cancelar
                             </button>
@@ -2323,17 +3435,490 @@ export default function App() {
         )}
 
         {/* ====================================================================
-            VIEW 2: GERENCIAR TODOS OS LINKS DE EMISSÃO (LISTA RÁPIDA DE LINKS)
+            VIEW 2: BANCO DE DADOS COMPLETO DE CADA EMPRESA (COM LEITURA DE PDF)
+        ==================================================================== */}
+        {activeSection === 'company_db' && (
+          <section className="space-y-5">
+            <div className="p-5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Database className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                  Banco de Dados das Empresas para Autopreenchimento de Portais
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  Você pode digitar os dados abaixo ou clicar em <strong>Preencher Ficha Lendo PDF</strong> (enviando o Cartão CNPJ, Contrato Social ou Certidão da JUCEPI/SEFAZ-PI) para o sistema extrair tudo sozinho!
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {companies.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setSelectedCompanyId(c.id)}
+                    className={`px-3 py-2 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
+                      activeCompany.id === c.id
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-blue-500'
+                    }`}
+                  >
+                    {c.companyName}
+                  </button>
+                ))}
+
+                <input
+                  ref={companyPdfInputRef}
+                  type="file"
+                  accept=".pdf,image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handlePopulateCompanyFromPdf(f);
+                    e.target.value = '';
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={isSmartReadingBatch}
+                  onClick={() => companyPdfInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg cursor-pointer disabled:opacity-60"
+                >
+                  {isSmartReadingBatch ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <FileScan className="w-3.5 h-3.5" />
+                  )}
+                  Preencher Ficha Lendo PDF (Cartão CNPJ / Contrato Social)
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+              {/* Bloco 1: Identificação Fiscal e Cadastral */}
+              <div className="lg:col-span-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Building2 className="w-4 h-4 text-blue-600" />
+                    1. Dados Fiscais, Estaduais (SEFAZ-PI) e Municipais ({activeCompany.companyName})
+                  </h3>
+                  {companies.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCompany(activeCompany.id)}
+                      className="inline-flex items-center gap-1 text-xs text-red-600 hover:underline cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Excluir esta empresa
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Razão Social Completa
+                    </label>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={activeCompany.companyName}
+                        onChange={(e) => updateActiveCompanyField('companyName', e.target.value)}
+                        className="flex-1 px-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleCopyText('db-razao', activeCompany.companyName, 'Razão Social')
+                        }
+                        className="px-3 py-2 text-xs bg-slate-100 dark:bg-slate-800 rounded-lg hover:bg-slate-200 cursor-pointer"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      CNPJ (Com pontuação)
+                    </label>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={activeCompany.cnpj}
+                        onChange={(e) => updateActiveCompanyField('cnpj', e.target.value)}
+                        placeholder="00.000.000/0001-00"
+                        className="flex-1 px-3 py-2 text-sm font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleCopyText(
+                            'db-cnpj-num',
+                            onlyDigits(activeCompany.cnpj),
+                            'CNPJ (Só Números)'
+                          )
+                        }
+                        className="px-2.5 py-2 text-xs font-mono bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 rounded-lg cursor-pointer whitespace-nowrap"
+                      >
+                        Só Nº
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Inscrição Estadual - IE (SEFAZ-PI)
+                    </label>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={activeCompany.stateRegistration}
+                        onChange={(e) =>
+                          updateActiveCompanyField('stateRegistration', e.target.value)
+                        }
+                        placeholder="Ex: 19.456.789-0"
+                        className="flex-1 px-3 py-2 text-sm font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleCopyText(
+                            'db-ie-num',
+                            onlyDigits(activeCompany.stateRegistration),
+                            'IE (Só Números)'
+                          )
+                        }
+                        className="px-2.5 py-2 text-xs font-mono bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 rounded-lg cursor-pointer whitespace-nowrap"
+                      >
+                        Só Nº
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Inscrição Municipal / CMC (Prefeitura)
+                    </label>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={activeCompany.municipalRegistration}
+                        onChange={(e) =>
+                          updateActiveCompanyField('municipalRegistration', e.target.value)
+                        }
+                        placeholder="Ex: 458920-1"
+                        className="flex-1 px-3 py-2 text-sm font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleCopyText(
+                            'db-im-num',
+                            onlyDigits(activeCompany.municipalRegistration),
+                            'IM (Só Números)'
+                          )
+                        }
+                        className="px-2.5 py-2 text-xs font-mono bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 rounded-lg cursor-pointer whitespace-nowrap"
+                      >
+                        Só Nº
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      NIRE (Junta Comercial - JUCEPI)
+                    </label>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={activeCompany.nire}
+                        onChange={(e) => updateActiveCompanyField('nire', e.target.value)}
+                        className="flex-1 px-3 py-2 text-sm font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleCopyText('db-nire', activeCompany.nire, 'NIRE')}
+                        className="px-3 py-2 text-xs bg-slate-100 dark:bg-slate-800 rounded-lg cursor-pointer"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      E-mail para Recebimento de Certidões
+                    </label>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="email"
+                        value={activeCompany.email}
+                        onChange={(e) => updateActiveCompanyField('email', e.target.value)}
+                        className="flex-1 px-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleCopyText('db-email', activeCompany.email, 'E-mail')}
+                        className="px-3 py-2 text-xs bg-slate-100 dark:bg-slate-800 rounded-lg cursor-pointer"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Telefone / WhatsApp
+                    </label>
+                    <input
+                      type="text"
+                      value={activeCompany.phone}
+                      onChange={(e) => updateActiveCompanyField('phone', e.target.value)}
+                      className="w-full px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      CEP
+                    </label>
+                    <input
+                      type="text"
+                      value={activeCompany.cep}
+                      onChange={(e) => updateActiveCompanyField('cep', e.target.value)}
+                      className="w-full px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Município / UF
+                    </label>
+                    <input
+                      type="text"
+                      value={activeCompany.cityState}
+                      onChange={(e) => updateActiveCompanyField('cityState', e.target.value)}
+                      className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Endereço Completo da Sede
+                    </label>
+                    <input
+                      type="text"
+                      value={activeCompany.address}
+                      onChange={(e) => updateActiveCompanyField('address', e.target.value)}
+                      className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                    />
+                  </div>
+                </div>
+
+                {/* Sócio Administrador & Responsável Técnico */}
+                <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-4">
+                  <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                    <UserCheck className="w-4 h-4 text-emerald-600" />
+                    2. Sócio Administrador e Responsável Técnico
+                  </h4>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Nome do Sócio Administrador
+                      </label>
+                      <input
+                        type="text"
+                        value={activeCompany.partnerName}
+                        onChange={(e) => updateActiveCompanyField('partnerName', e.target.value)}
+                        className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        CPF do Sócio
+                      </label>
+                      <div className="flex gap-1">
+                        <input
+                          type="text"
+                          value={activeCompany.partnerCpf}
+                          onChange={(e) => updateActiveCompanyField('partnerCpf', e.target.value)}
+                          className="flex-1 px-2.5 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleCopyText(
+                              'db-cpf-num',
+                              onlyDigits(activeCompany.partnerCpf),
+                              'CPF Sócio (Só Números)'
+                            )
+                          }
+                          className="px-2 py-1 text-xs font-mono bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 rounded-lg cursor-pointer"
+                        >
+                          Só Nº
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Nascimento do Sócio
+                      </label>
+                      <input
+                        type="date"
+                        value={activeCompany.partnerBirthDate}
+                        onChange={(e) =>
+                          updateActiveCompanyField('partnerBirthDate', e.target.value)
+                        }
+                        className="w-full px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Responsável Técnico (RT)
+                      </label>
+                      <input
+                        type="text"
+                        value={activeCompany.techResponsibleName}
+                        onChange={(e) =>
+                          updateActiveCompanyField('techResponsibleName', e.target.value)
+                        }
+                        className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Nº Conselho (CREA-PI / CRQ / CRBio)
+                      </label>
+                      <input
+                        type="text"
+                        value={activeCompany.techResponsibleCouncil}
+                        onChange={(e) =>
+                          updateActiveCompanyField('techResponsibleCouncil', e.target.value)
+                        }
+                        className="w-full px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        CPF do Responsável Técnico
+                      </label>
+                      <input
+                        type="text"
+                        value={activeCompany.techResponsibleCpf}
+                        onChange={(e) =>
+                          updateActiveCompanyField('techResponsibleCpf', e.target.value)
+                        }
+                        className="w-full px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Senhas / Credenciais de Portais */}
+                <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                  <label className="block text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                    <KeyRound className="w-4 h-4 text-amber-500" />
+                    3. Anotações de Senhas / Acessos nos Portais (SIAT Teresina, SEFAZ-PI, Conselhos)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={activeCompany.portalAccessNotes}
+                    onChange={(e) =>
+                      updateActiveCompanyField('portalAccessNotes', e.target.value)
+                    }
+                    className="w-full px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                  />
+                </div>
+              </div>
+
+              {/* Bloco Lateral: Favorito Mágico + Fichário de Cópia */}
+              <div className="space-y-4">
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-blue-200 dark:border-blue-900 p-5 space-y-3">
+                  <div className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-white">
+                    <Sparkles className="w-4 h-4 text-amber-500" />
+                    Botão Mágico de AutoPreenchimento
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    Arraste o botão azul abaixo para a <strong>Barra de Favoritos</strong> do seu navegador. Quando abrir qualquer site de certidão, clique nele nos seus favoritos: ele preenche <strong>CNPJ, IE, IM, CPF e E-mail sozinho</strong> e já posiciona o cursor direto no <strong>Captcha</strong>!
+                  </p>
+                  <div className="pt-1">
+                    <a
+                      href={bookmarkletHref}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        showToast(
+                          'Arraste este botão com o mouse até a Barra de Favoritos do seu navegador!'
+                        );
+                      }}
+                      className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow cursor-grab active:cursor-grabbing"
+                    >
+                      <Zap className="w-4 h-4 text-amber-300" />
+                      ⚡ AutoPreencher: {activeCompany.companyName.slice(0, 22)}
+                    </a>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowTampermonkeyModal(true)}
+                    className="w-full py-2 px-3 text-xs font-semibold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 rounded-lg cursor-pointer"
+                  >
+                    Ver Script 100% Automático (Tampermonkey)
+                  </button>
+                </div>
+
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 space-y-3">
+                  <h3 className="text-xs font-bold text-slate-900 dark:text-white">
+                    Fichário de Cópia em 1 Clique ({activeCompany.companyName})
+                  </h3>
+                  <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
+                    {(Object.entries(activeCompanyFieldMap) as [
+                      AutoFillFieldKey,
+                      { label: string; value: string; description: string }
+                    ][]).map(([key, item]) => (
+                      <div key={key} className="py-2 flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-medium text-slate-700 dark:text-slate-300">
+                            {item.label}
+                          </div>
+                          <div className="font-mono text-slate-500 dark:text-slate-400 truncate">
+                            {item.value || 'Não preenchido'}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={!item.value}
+                          onClick={() => handleCopyText(`card-${key}`, item.value, item.label)}
+                          className="px-2.5 py-1 text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-blue-600 hover:text-white rounded transition-colors cursor-pointer shrink-0 disabled:opacity-40"
+                        >
+                          {copiedId === `card-${key}` ? 'Copiado!' : 'Copiar'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* ====================================================================
+            VIEW 3: GERENCIAR LINKS & DADO AUTOMÁTICO POR SITE
         ==================================================================== */}
         {activeSection === 'links' && (
           <section className="space-y-4">
             <div className="p-5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
                 <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                  Lista Geral de Links para Emissão de Certidões (Piauí e Federal)
+                  Configuração dos Links de Emissão e Dado Automático por Site
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                  Cole ou altere qualquer link abaixo. Ao alterar um link aqui, ele é atualizado automaticamente para todas as suas empresas do Piauí.
+                  Escolha qual dado do Banco de Dados da Empresa (CNPJ limpo, IE SEFAZ-PI, IM Prefeitura, CPF do Sócio, NIRE) deve ser copiado e injetado automaticamente ao clicar em <strong>Emitir Auto</strong>.
                 </p>
               </div>
               <button
@@ -2341,140 +3926,23 @@ export default function App() {
                 onClick={() => setActiveSection('dashboard')}
                 className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer whitespace-nowrap self-start sm:self-auto"
               >
-                Voltar para Lista de Certidões
+                Voltar para Lista
               </button>
             </div>
 
             <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-200 dark:divide-slate-800">
-              {enrichedDocuments.map(({ doc }, idx) => (
+              {enrichedDocuments.map(({ doc, company: comp }, idx) => (
                 <PortalLinkRowEditor
                   key={doc.id}
                   index={idx + 1}
                   doc={doc}
-                  cnpjToCopy={activeCompany.cnpj}
-                  onCopy={() =>
-                    handleCopyText(`link-tab-${doc.id}`, activeCompany.cnpj, 'CNPJ')
-                  }
-                  isCopied={copiedId === `link-tab-${doc.id}`}
-                  onSaveLink={(newUrl, newIssuer) =>
-                    handleUpdatePortalLinkEverywhere(doc, newUrl, newIssuer)
+                  company={comp}
+                  onEmit={() => handleSmartEmitClick(doc, comp)}
+                  onSaveLink={(newUrl, newIssuer, newPrimaryField) =>
+                    handleUpdatePortalLinkEverywhere(doc, newUrl, newIssuer, newPrimaryField)
                   }
                 />
               ))}
-            </div>
-          </section>
-        )}
-
-        {/* ====================================================================
-            VIEW 3: GERENCIAR EMPRESAS DO PIAUÍ
-        ==================================================================== */}
-        {activeSection === 'companies' && (
-          <section className="space-y-4">
-            <div className="p-5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                  Empresas Cadastradas (Piauí)
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                  Selecione qual empresa deseja gerenciar no painel ou cadastre novas empresas já com as 23 certidões padrão pré-configuradas.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() =>
-                  setCompanyModal({
-                    isNew: true,
-                    profile: {
-                      id: `comp-${Date.now()}`,
-                      companyName: '',
-                      cnpj: '',
-                      stateRegistration: '',
-                      municipalRegistration: '',
-                      cityState: 'Teresina - PI',
-                    },
-                    cloneStandardDocs: true,
-                  })
-                }
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <Plus className="w-4 h-4" />
-                Cadastrar Nova Empresa
-              </button>
-            </div>
-
-            <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-200 dark:divide-slate-800">
-              {companies.map((comp) => {
-                const compDocs = documents.filter((d) => d.companyId === comp.id);
-                const isSelected = selectedCompanyId === comp.id;
-                return (
-                  <div
-                    key={comp.id}
-                    className={`p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
-                      isSelected ? 'bg-blue-50/40 dark:bg-blue-950/20' : ''
-                    }`}
-                  >
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-bold text-slate-900 dark:text-white">
-                          {comp.companyName}
-                        </span>
-                        {isSelected && (
-                          <span className="text-xs font-semibold text-blue-600 dark:text-blue-400">
-                            · Empresa Ativa no Filtro
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
-                        <span>CNPJ: {comp.cnpj || 'Não informado'}</span>
-                        <span>·</span>
-                        <span>IE (SEFAZ-PI): {comp.stateRegistration || '—'}</span>
-                        <span>·</span>
-                        <span>IM: {comp.municipalRegistration || '—'}</span>
-                        <span>·</span>
-                        <span>{comp.cityState}</span>
-                        <span>·</span>
-                        <span>{compDocs.length} certidões</span>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedCompanyId(comp.id);
-                          setActiveSection('dashboard');
-                        }}
-                        className="px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer"
-                      >
-                        Abrir Certidões
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setCompanyModal({
-                            isNew: false,
-                            profile: { ...comp },
-                            cloneStandardDocs: false,
-                          })
-                        }
-                        className="px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-lg cursor-pointer"
-                      >
-                        Editar Dados
-                      </button>
-                      {companies.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteCompany(comp.id)}
-                          className="p-1.5 text-slate-400 hover:text-red-600 bg-slate-100 dark:bg-slate-800 rounded-lg cursor-pointer"
-                          title="Excluir empresa"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
             </div>
           </section>
         )}
@@ -2492,7 +3960,7 @@ export default function App() {
                     Exportar Backup Completo (JSON)
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Salva todas as empresas do Piauí, certidões, links customizados e PDFs anexados em arquivo único.
+                    Salva o banco de dados de todas as empresas do Piauí, certidões, links e PDFs anexados.
                   </p>
                 </div>
                 <button
@@ -2598,14 +4066,116 @@ export default function App() {
       </main>
 
       {/* ====================================================================
-          MODAL: CRIAR OU EDITAR EMPRESA DO PIAUÍ
+          MODAL: AUTOMAÇÃO DE PREENCHIMENTO NOS PORTAIS
+      ==================================================================== */}
+      {showTampermonkeyModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl max-w-2xl w-full p-6 space-y-5 shadow-2xl my-8">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Zap className="w-5 h-5 text-amber-500" />
+                  Como funciona o Preenchimento Automático nos Sites do Governo
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  Deixe tudo preenchido automaticamente para você só digitar o código do Captcha!
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTampermonkeyModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs text-slate-700 dark:text-slate-300">
+              <div className="p-4 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2">
+                <div className="font-bold text-slate-900 dark:text-white">
+                  1. Automático ao Clicar em "⚡ Emitir Auto" + Leitura de PDF
+                </div>
+                <ul className="list-disc pl-5 space-y-1 text-slate-600 dark:text-slate-400">
+                  <li>
+                    Ao clicar em <strong>⚡ Emitir Auto</strong>, o sistema já copia automaticamente o CNPJ/IE/IM exato daquela certidão para o seu <strong>Ctrl+V</strong>.
+                  </li>
+                  <li>
+                    Assim que baixar o PDF da certidão, basta clicar em <strong>Anexar PDF</strong>: o programa lê o PDF sozinho e preenche a Data de Emissão, Data de Vencimento e o Código de Autenticidade automaticamente!
+                  </li>
+                </ul>
+              </div>
+
+              <div className="p-4 bg-blue-50/50 dark:bg-blue-950/30 rounded-xl border border-blue-200 dark:border-blue-800 space-y-2.5">
+                <div className="font-bold text-slate-900 dark:text-white">
+                  2. Favorito Mágico de 1 Clique (Sem instalar extensão)
+                </div>
+                <p>
+                  Arraste o botão abaixo para a sua <strong>Barra de Favoritos</strong> do Chrome/Edge. Quando o site da SEFAZ-PI, TJPI, Receita ou Prefeitura abrir, clique nesse favorito: ele preenche todos os campos na tela e <strong>já deixa o cursor piscando no Captcha</strong>:
+                </p>
+                <div>
+                  <a
+                    href={bookmarkletHref}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      showToast('Arraste este botão até a sua Barra de Favoritos do navegador!');
+                    }}
+                    className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow cursor-grab"
+                  >
+                    <Zap className="w-4 h-4 text-amber-300" />
+                    ⚡ AutoPreencher {activeCompany.companyName}
+                  </a>
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                    <Code2 className="w-4 h-4 text-blue-600" />
+                    3. Preenchimento 100% Sozinho ao Abrir a Aba (Tampermonkey)
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleCopyText(
+                        'copy-userscript',
+                        generateTampermonkeyScript(),
+                        'Script de Autopreenchimento'
+                      )
+                    }
+                    className="inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    Copiar Script Automático
+                  </button>
+                </div>
+                <p className="text-slate-600 dark:text-slate-400">
+                  Se você usa a extensão gratuita <strong>Tampermonkey</strong>, cole este script nela: ele lê os dados enviados pelo botão Emitir e preenche o site do governo sozinho assim que a página carrega!
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-200 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowTampermonkeyModal(false)}
+                className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer"
+              >
+                Entendi, Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          MODAL: CRIAR NOVA EMPRESA DO PIAUÍ
       ==================================================================== */}
       {companyModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl max-w-lg w-full p-6 space-y-4 shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl max-w-xl w-full p-6 space-y-4 shadow-xl my-8">
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
               <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                {companyModal.isNew ? 'Cadastrar Nova Empresa (Piauí)' : 'Editar Dados da Empresa'}
+                {companyModal.isNew ? 'Cadastrar Nova Empresa (Piauí)' : 'Editar Empresa'}
               </h3>
               <button
                 type="button"
@@ -2617,26 +4187,25 @@ export default function App() {
             </div>
 
             <form onSubmit={handleSaveCompany} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Razão Social / Nome Fantasia *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ex: Limpadora Piauí Serviços Ltda"
-                  value={companyModal.profile.companyName}
-                  onChange={(e) =>
-                    setCompanyModal({
-                      ...companyModal,
-                      profile: { ...companyModal.profile, companyName: e.target.value },
-                    })
-                  }
-                  className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
-                />
-              </div>
-
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Razão Social *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={companyModal.profile.companyName}
+                    onChange={(e) =>
+                      setCompanyModal({
+                        ...companyModal,
+                        profile: { ...companyModal.profile, companyName: e.target.value },
+                      })
+                    }
+                    className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                  />
+                </div>
+
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     CNPJ *
@@ -2644,7 +4213,6 @@ export default function App() {
                   <input
                     type="text"
                     required
-                    placeholder="00.000.000/0001-00"
                     value={companyModal.profile.cnpj}
                     onChange={(e) =>
                       setCompanyModal({
@@ -2652,25 +4220,7 @@ export default function App() {
                         profile: { ...companyModal.profile, cnpj: e.target.value },
                       })
                     }
-                    className="w-full px-3 py-2 text-sm font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Município / UF
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Teresina - PI"
-                    value={companyModal.profile.cityState}
-                    onChange={(e) =>
-                      setCompanyModal({
-                        ...companyModal,
-                        profile: { ...companyModal.profile, cityState: e.target.value },
-                      })
-                    }
-                    className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                    className="w-full px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
                   />
                 </div>
 
@@ -2680,25 +4230,26 @@ export default function App() {
                   </label>
                   <input
                     type="text"
-                    placeholder="Ex: 19.000.000-0"
                     value={companyModal.profile.stateRegistration}
                     onChange={(e) =>
                       setCompanyModal({
                         ...companyModal,
-                        profile: { ...companyModal.profile, stateRegistration: e.target.value },
+                        profile: {
+                          ...companyModal.profile,
+                          stateRegistration: e.target.value,
+                        },
                       })
                     }
-                    className="w-full px-3 py-2 text-sm font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                    className="w-full px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
                   />
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Inscrição Municipal (Prefeitura)
+                    Inscrição Municipal (CMC Prefeitura)
                   </label>
                   <input
                     type="text"
-                    placeholder="Ex: 458920-1"
                     value={companyModal.profile.municipalRegistration}
                     onChange={(e) =>
                       setCompanyModal({
@@ -2709,7 +4260,58 @@ export default function App() {
                         },
                       })
                     }
-                    className="w-full px-3 py-2 text-sm font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                    className="w-full px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    NIRE (JUCEPI)
+                  </label>
+                  <input
+                    type="text"
+                    value={companyModal.profile.nire}
+                    onChange={(e) =>
+                      setCompanyModal({
+                        ...companyModal,
+                        profile: { ...companyModal.profile, nire: e.target.value },
+                      })
+                    }
+                    className="w-full px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    CPF do Sócio Administrador
+                  </label>
+                  <input
+                    type="text"
+                    value={companyModal.profile.partnerCpf}
+                    onChange={(e) =>
+                      setCompanyModal({
+                        ...companyModal,
+                        profile: { ...companyModal.profile, partnerCpf: e.target.value },
+                      })
+                    }
+                    className="w-full px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    E-mail para Certidões
+                  </label>
+                  <input
+                    type="email"
+                    value={companyModal.profile.email}
+                    onChange={(e) =>
+                      setCompanyModal({
+                        ...companyModal,
+                        profile: { ...companyModal.profile, email: e.target.value },
+                      })
+                    }
+                    className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
                   />
                 </div>
               </div>
@@ -2728,7 +4330,7 @@ export default function App() {
                     className="rounded text-blue-600"
                   />
                   <span>
-                    Criar automaticamente a lista padrão das <strong>23 certidões do Piauí</strong> para esta empresa (já aproveitando seus links salvos).
+                    Criar automaticamente as <strong>23 certidões padrão do Piauí</strong> para esta empresa.
                   </span>
                 </label>
               )}
@@ -2754,7 +4356,7 @@ export default function App() {
       )}
 
       {/* ====================================================================
-          MODAL: 1-CLICK QUICK RENEWAL ("🔄 Renovar Certidão")
+          MODAL: 1-CLICK QUICK RENEWAL (COM LEITURA AUTOMÁTICA DO PDF ANEXADO)
       ==================================================================== */}
       {renewingDoc && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs">
@@ -2763,7 +4365,7 @@ export default function App() {
               <div>
                 <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                   <RefreshCw className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                  Renovar Certidão em 1 Clique
+                  Renovar Certidão (Leitura Automática de PDF)
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                   {renewingDoc.doc.name}
@@ -2779,6 +4381,23 @@ export default function App() {
             </div>
 
             <form onSubmit={confirmQuickRenew} className="space-y-4">
+              <div className="p-3.5 bg-blue-50/50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-xl space-y-2">
+                <label className="block text-xs font-bold text-blue-900 dark:text-blue-200">
+                  1. Anexe o PDF da Certidão (O sistema lerá a Emissão e Vencimento sozinho)
+                </label>
+                <input
+                  type="file"
+                  accept=".pdf,image/*"
+                  onChange={(e) => handleRenewModalFileSelect(e.target.files?.[0] || null)}
+                  className="w-full text-xs text-slate-600 dark:text-slate-300 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700"
+                />
+                {renewingDoc.extractedInfo && (
+                  <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400 pt-1">
+                    {renewingDoc.extractedInfo}
+                  </div>
+                )}
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
@@ -2864,40 +4483,6 @@ export default function App() {
                 ))}
               </div>
 
-              <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Anexar PDF / Imagem da Nova Certidão (Opcional)
-                  </label>
-                  <input
-                    type="file"
-                    accept=".pdf,image/*"
-                    onChange={(e) =>
-                      setRenewingDoc({
-                        ...renewingDoc,
-                        newFile: e.target.files?.[0] || null,
-                      })
-                    }
-                    className="w-full text-xs text-slate-600 dark:text-slate-300 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 dark:file:bg-blue-950 dark:file:text-blue-300"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Ou Link no Google Drive / Nuvem (Opcional)
-                  </label>
-                  <input
-                    type="url"
-                    placeholder="https://drive.google.com/..."
-                    value={renewingDoc.newDriveUrl}
-                    onChange={(e) =>
-                      setRenewingDoc({ ...renewingDoc, newDriveUrl: e.target.value })
-                    }
-                    className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
-                  />
-                </div>
-              </div>
-
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
                 <button
                   type="button"
@@ -2927,7 +4512,7 @@ export default function App() {
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl max-w-2xl w-full p-6 space-y-5 shadow-xl my-8">
             <div className="flex items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-3">
               <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                {isNewDocModal ? 'Cadastrar Nova Certidão / Licença' : 'Editar Certidão / Link / Datas'}
+                {isNewDocModal ? 'Cadastrar Nova Certidão / Licença' : 'Editar Certidão / Automação'}
               </h3>
               <button
                 type="button"
@@ -3030,28 +4615,39 @@ export default function App() {
                     type="text"
                     value={editingDoc.issuer}
                     onChange={(e) => setEditingDoc({ ...editingDoc, issuer: e.target.value })}
-                    placeholder="Ex: SEFAZ-PI, TJPI, JUCEPI, Receita Federal"
                     className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
                   />
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    CNPJ / Inscrição / Referência
+                    Qual dado copiar/usar ao clicar em "Emitir Auto"?
                   </label>
-                  <input
-                    type="text"
-                    value={editingDoc.registrationCode}
+                  <select
+                    value={editingDoc.primaryAutoFillField || 'cnpj_num'}
                     onChange={(e) =>
-                      setEditingDoc({ ...editingDoc, registrationCode: e.target.value })
+                      setEditingDoc({
+                        ...editingDoc,
+                        primaryAutoFillField: e.target.value as AutoFillFieldKey,
+                      })
                     }
-                    className="w-full px-3 py-2 text-sm font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
-                  />
+                    className="w-full px-3 py-2 text-xs font-semibold bg-blue-50/50 dark:bg-slate-950 border border-blue-300 dark:border-blue-800 rounded-lg text-slate-900 dark:text-white"
+                  >
+                    <option value="cnpj_num">CNPJ (Somente Números - Receita, TST, Caixa, SEFAZ)</option>
+                    <option value="cnpj_fmt">CNPJ (Com Pontuação 00.000.000/0001-00)</option>
+                    <option value="ie_num">Inscrição Estadual SEFAZ-PI (Somente Números)</option>
+                    <option value="im_num">Inscrição Municipal Prefeitura (Somente Números)</option>
+                    <option value="cpf_num">CPF do Sócio Administrador (Somente Números)</option>
+                    <option value="nire">NIRE (JUCEPI)</option>
+                    <option value="council">Registro no Conselho (CREA-PI / CRQ / CRBio)</option>
+                    <option value="email">E-mail da Empresa</option>
+                    <option value="razao">Razão Social</option>
+                  </select>
                 </div>
 
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-semibold text-blue-700 dark:text-blue-400 mb-1">
-                    Link do Site Emissor (URL para Emissão da Certidão)
+                    Link do Site Emissor
                   </label>
                   <input
                     type="url"
@@ -3150,64 +4746,6 @@ export default function App() {
                 )}
               </div>
 
-              {/* Attachment & Cloud Link */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Upload de Arquivo (PDF ou Imagem)
-                  </label>
-                  <input
-                    type="file"
-                    accept=".pdf,image/*"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) handleAttachFileToDoc(editingDoc.id, f);
-                    }}
-                    className="w-full text-xs text-slate-600 dark:text-slate-300 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 dark:file:bg-blue-950 dark:file:text-blue-300"
-                  />
-                  {editingDoc.fileName && (
-                    <div className="mt-1 text-xs text-emerald-600 dark:text-emerald-400">
-                      Anexo atual: {editingDoc.fileName}
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Ou Link no Google Drive / Nuvem
-                  </label>
-                  <input
-                    type="url"
-                    value={editingDoc.driveUrl || ''}
-                    onChange={(e) =>
-                      setEditingDoc({
-                        ...editingDoc,
-                        driveUrl: e.target.value,
-                        fileType: e.target.value.trim()
-                          ? 'drive'
-                          : editingDoc.fileName
-                          ? 'local'
-                          : 'none',
-                      })
-                    }
-                    placeholder="https://drive.google.com/..."
-                    className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Observações
-                </label>
-                <textarea
-                  rows={2}
-                  value={editingDoc.notes}
-                  onChange={(e) => setEditingDoc({ ...editingDoc, notes: e.target.value })}
-                  className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
-                />
-              </div>
-
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
                 <button
                   type="button"
@@ -3254,17 +4792,6 @@ export default function App() {
                     Baixar Arquivo
                   </button>
                 )}
-                {previewModal.doc.driveUrl && (
-                  <a
-                    href={previewModal.doc.driveUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    Abrir no Drive
-                  </a>
-                )}
                 <button
                   type="button"
                   onClick={() => setPreviewModal(null)}
@@ -3291,23 +4818,6 @@ export default function App() {
                     className="w-full h-full rounded border border-slate-200 dark:border-slate-800 bg-white"
                   />
                 )
-              ) : previewModal.doc.driveUrl ? (
-                <div className="text-center space-y-4 max-w-md p-6 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-                  <ExternalLink className="w-10 h-10 text-blue-600 dark:text-blue-400 mx-auto" />
-                  <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                    Documento Armazenado na Nuvem
-                  </h4>
-                  <p className="text-xs text-slate-500 break-all">{previewModal.doc.driveUrl}</p>
-                  <a
-                    href={previewModal.doc.driveUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg"
-                  >
-                    <ExternalLink className="w-4 h-4" />
-                    Abrir em Nova Aba
-                  </a>
-                </div>
               ) : (
                 <div className="text-xs text-slate-500">Nenhum anexo carregado.</div>
               )}
@@ -3350,7 +4860,7 @@ export default function App() {
 
       {/* FLOATING TOAST */}
       {toastMessage && (
-        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 px-4 py-2.5 text-xs font-medium text-white bg-slate-900 dark:bg-slate-800 border border-slate-700 rounded-lg shadow-lg">
+        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 px-4 py-2.5 text-xs font-medium text-white bg-slate-900 dark:bg-slate-800 border border-slate-700 rounded-lg shadow-lg max-w-md">
           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
           <span>{toastMessage}</span>
         </div>
@@ -3359,9 +4869,9 @@ export default function App() {
       <footer className="mt-auto border-t border-slate-200 dark:border-slate-800 py-4 px-6 text-xs text-slate-500 dark:text-slate-400">
         <div className="max-w-[1440px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           <span>
-            Mago das Licitações — Gestão Multi-Empresas de Certidões e Licenças (Piauí)
+            Mago das Licitações — Gestão Multi-Empresas, Leitura Automática de PDFs & Autopreenchimento (Piauí)
           </span>
-          <span>Dados salvos automaticamente no navegador</span>
+          <span>Banco de dados local sincronizado automaticamente</span>
         </div>
       </footer>
     </div>
@@ -3369,36 +4879,44 @@ export default function App() {
 }
 
 // ============================================================================
-// SUB-COMPONENT: INLINE PORTAL LINK EDITOR ROW (FOR "GERENCIAR LINKS (PI)" TAB)
+// SUB-COMPONENT: PORTAL LINK & AUTOFILL CONFIG ROW EDITOR
 // ============================================================================
 
 function PortalLinkRowEditor({
   index,
   doc,
-  cnpjToCopy,
-  onCopy,
-  isCopied,
+  company,
+  onEmit,
   onSaveLink,
 }: {
   index: number;
   doc: CertidaoDocument;
-  cnpjToCopy: string;
-  onCopy: () => void;
-  isCopied: boolean;
-  onSaveLink: (url: string, issuer: string) => void;
+  company: CompanyProfile;
+  onEmit: () => void;
+  onSaveLink: (url: string, issuer: string, primaryField: AutoFillFieldKey) => void;
 }) {
   const [urlValue, setUrlValue] = useState(doc.emitterUrl || '');
   const [issuerValue, setIssuerValue] = useState(doc.issuer || '');
-  const isDirty = urlValue !== (doc.emitterUrl || '') || issuerValue !== (doc.issuer || '');
+  const [fieldKey, setFieldKey] = useState<AutoFillFieldKey>(
+    doc.primaryAutoFillField || 'cnpj_num'
+  );
+
+  const isDirty =
+    urlValue !== (doc.emitterUrl || '') ||
+    issuerValue !== (doc.issuer || '') ||
+    fieldKey !== (doc.primaryAutoFillField || 'cnpj_num');
 
   useEffect(() => {
     setUrlValue(doc.emitterUrl || '');
     setIssuerValue(doc.issuer || '');
-  }, [doc.emitterUrl, doc.issuer]);
+    setFieldKey(doc.primaryAutoFillField || 'cnpj_num');
+  }, [doc.emitterUrl, doc.issuer, doc.primaryAutoFillField]);
+
+  const targetUrl = buildAutoFillTargetUrl(urlValue, company);
 
   return (
-    <div className="p-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-3 hover:bg-slate-50/70 dark:hover:bg-slate-800/30">
-      <div className="min-w-0 lg:w-1/3">
+    <div className="p-3.5 flex flex-col xl:flex-row xl:items-center justify-between gap-3 hover:bg-slate-50/70 dark:hover:bg-slate-800/30">
+      <div className="min-w-0 xl:w-1/3">
         <div className="text-xs font-semibold text-slate-900 dark:text-white flex items-center gap-2">
           <span className="font-mono text-slate-400">{String(index).padStart(2, '0')}.</span>
           <span className="truncate">{doc.name}</span>
@@ -3408,25 +4926,40 @@ function PortalLinkRowEditor({
             type="text"
             value={issuerValue}
             onChange={(e) => setIssuerValue(e.target.value)}
-            placeholder="Órgão Emissor (Ex: SEFAZ-PI, TJPI)"
+            placeholder="Órgão Emissor"
             className="w-full px-2 py-1 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded text-slate-600 dark:text-slate-300"
           />
         </div>
       </div>
 
       <div className="flex-1 flex flex-col sm:flex-row sm:items-center gap-2">
+        <select
+          value={fieldKey}
+          onChange={(e) => setFieldKey(e.target.value as AutoFillFieldKey)}
+          className="px-2.5 py-1.5 text-xs font-medium bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-800 dark:text-slate-200 shrink-0"
+        >
+          <option value="cnpj_num">Auto: CNPJ (Só Nº)</option>
+          <option value="cnpj_fmt">Auto: CNPJ (Com Pontos)</option>
+          <option value="ie_num">Auto: IE SEFAZ-PI (Só Nº)</option>
+          <option value="im_num">Auto: IM Prefeitura (Só Nº)</option>
+          <option value="cpf_num">Auto: CPF do Sócio</option>
+          <option value="nire">Auto: NIRE JUCEPI</option>
+          <option value="council">Auto: Nº Conselho</option>
+          <option value="email">Auto: E-mail</option>
+        </select>
+
         <input
           type="url"
           value={urlValue}
           onChange={(e) => setUrlValue(e.target.value)}
-          placeholder="Cole aqui o link de emissão desta certidão (https://...)"
+          placeholder="Cole aqui o link de emissão (https://...)"
           className="flex-1 px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:border-blue-600"
         />
 
         <div className="flex items-center gap-1.5 shrink-0">
           <button
             type="button"
-            onClick={() => onSaveLink(urlValue, issuerValue)}
+            onClick={() => onSaveLink(urlValue, issuerValue, fieldKey)}
             disabled={!isDirty}
             className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
               isDirty
@@ -3434,31 +4967,21 @@ function PortalLinkRowEditor({
                 : 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-default'
             }`}
           >
-            Salvar Link
+            Salvar
           </button>
 
           {urlValue && (
             <a
-              href={urlValue}
+              href={targetUrl}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={onEmit}
               className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 rounded-lg whitespace-nowrap"
-              title="Testar abertura do link em nova aba"
             >
-              <ExternalLink className="w-3.5 h-3.5" />
-              Abrir Site
+              <Zap className="w-3.5 h-3.5 text-amber-500" />
+              Testar Emitir Auto
             </a>
           )}
-
-          <button
-            type="button"
-            onClick={onCopy}
-            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-mono text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-lg cursor-pointer whitespace-nowrap"
-            title={`Copiar CNPJ: ${cnpjToCopy}`}
-          >
-            {isCopied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-            CNPJ
-          </button>
         </div>
       </div>
     </div>
