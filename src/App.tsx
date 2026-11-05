@@ -40,15 +40,20 @@ import {
   Loader2,
   History,
   ListChecks,
+  Settings,
+  MoreVertical,
+  FileX,
 } from 'lucide-react';
 import {
   CertidaoDocument,
   CompanyFieldDiff,
   CompanyProfile,
+  CompanyBasicProfile,
   ComputedStatus,
   DocumentCategory,
   DocumentHistoryEntry,
   PendingPdfReviewItem,
+  AppSettings,
 } from './types/domain';
 import {
   onlyDigits,
@@ -72,13 +77,24 @@ import { DocumentHistoryView } from './components/DocumentHistoryView';
 import { PendenciasCenterView } from './components/PendenciasCenterView';
 import { BatchPdfImportView } from './components/BatchPdfImportView';
 import { AssistedEmissionDrawer } from './components/AssistedEmissionDrawer';
+import { SettingsCenterView } from './components/SettingsCenterView';
+import { CompanyManagementView } from './components/CompanyManagementView';
+import { DeletePdfModal } from './components/DeletePdfModal';
+import { PdfViewerModal } from './components/PdfViewerModal';
+import {
+  mergeWithDefaultSettings,
+  buildDefaultAppSettings,
+  buildDocumentsFromConfiguredModels,
+} from './utils/settingsConfig';
 
 export type {
   DocumentCategory,
   ComputedStatus,
   AutoFillFieldKey,
   CompanyProfile,
+  CompanyBasicProfile,
   CertidaoDocument,
+  AppSettings,
 };
 
 function buildAutoFillTargetUrl(rawUrl: string, _comp?: CompanyProfile): string {
@@ -862,10 +878,10 @@ function buildCompanyFieldDiffs(
   const diffs: CompanyFieldDiff[] = [];
 
   for (const { field, label } of COMPANY_FIELD_LABELS) {
-    const proposed = (extractedData[field] || '').trim();
+    const proposed = String(extractedData[field] ?? '').trim();
     if (!proposed) continue;
 
-    const current = (company[field] || '').trim();
+    const current = String(company[field] ?? '').trim();
     const isSameDigits =
       (field === 'cnpj' || field === 'partnerCpf' || field === 'cep') &&
       onlyDigits(current) === onlyDigits(proposed);
@@ -910,8 +926,27 @@ const STORAGE_KEY_DOCS = 'mago_licitacoes_docs_v2';
 const STORAGE_KEY_HISTORY = 'mago_licitacoes_history_v1';
 const STORAGE_KEY_WARNING_DAYS = 'mago_licitacoes_warning_days_v2';
 const STORAGE_KEY_THEME = 'mago_licitacoes_theme_v1';
+const STORAGE_KEY_SETTINGS = 'mago_licitacoes_settings_v1';
 
 export default function App() {
+  // App Settings (Central de Configurações)
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_SETTINGS);
+      return mergeWithDefaultSettings(saved ? JSON.parse(saved) : null);
+    } catch {
+      return buildDefaultAppSettings();
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
+    } catch (e) {
+      console.warn('Falha ao salvar configurações no localStorage:', e);
+    }
+  }, [settings]);
+
   // Theme state
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_THEME);
@@ -929,13 +964,15 @@ export default function App() {
     }
   }, [darkMode]);
 
-  // Multi-company state (preservando integralmente os dados existentes)
+  // Multi-company state (preservando integralmente os dados existentes sem recriar mock se usuário apagou)
   const [companies, setCompanies] = useState<CompanyProfile[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_COMPANIES);
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
+          // If the user intentionally emptied the list, parsed is [] -> return empty array!
+          if (parsed.length === 0) return [];
           return parsed.map((c: Partial<CompanyProfile>, idx: number) => ({
             ...INITIAL_COMPANIES[idx % INITIAL_COMPANIES.length],
             ...c,
@@ -955,15 +992,39 @@ export default function App() {
   // Selected Company Filter
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_ACTIVE_COMPANY);
-    return saved || INITIAL_COMPANIES[0].id;
+    return saved || (companies[0]?.id ?? '');
   });
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_ACTIVE_COMPANY, selectedCompanyId);
   }, [selectedCompanyId]);
 
-  const activeCompany = useMemo(() => {
-    return companies.find((c) => c.id === selectedCompanyId) || companies[0];
+  const activeCompany = useMemo<CompanyProfile>(() => {
+    const found = companies.find((c) => c.id === selectedCompanyId) || companies[0];
+    if (found) return found;
+    return {
+      id: 'comp-empty',
+      companyName: 'Nenhuma Empresa Cadastrada',
+      tradeName: '',
+      cnpj: '',
+      stateRegistration: '',
+      municipalRegistration: '',
+      nire: '',
+      cnaeMain: '',
+      cityState: 'Teresina - PI',
+      cep: '64000-000',
+      address: '',
+      email: '',
+      phone: '',
+      partnerName: '',
+      partnerCpf: '',
+      partnerRg: '',
+      partnerBirthDate: '',
+      techResponsibleName: '',
+      techResponsibleCouncil: '',
+      techResponsibleCpf: '',
+      portalAccessNotes: '',
+    };
   }, [companies, selectedCompanyId]);
 
   // Warning threshold days (60, 30, 15, 7, 1 dia)
@@ -1020,9 +1081,22 @@ export default function App() {
   const [categoryFilter, setCategoryFilter] = useState<'all' | DocumentCategory>('all');
   const [sortBy, setSortBy] = useState<'priority' | 'name' | 'category' | 'expiration'>('priority');
   const [activeSection, setActiveSection] = useState<
-    'dashboard' | 'batch_import' | 'pendencias' | 'history' | 'company_db' | 'links' | 'backup'
+    | 'dashboard'
+    | 'companies'
+    | 'settings'
+    | 'batch_import'
+    | 'pendencias'
+    | 'history'
+    | 'company_db'
+    | 'links'
+    | 'backup'
   >('dashboard');
+  const [settingsInitialTab, setSettingsInitialTab] = useState<string | undefined>(undefined);
   const [historyFilterDocId, setHistoryFilterDocId] = useState<string | null>(null);
+
+  // Dedicated PDF Modals State
+  const [deletingPdfDoc, setDeletingPdfDoc] = useState<CertidaoDocument | null>(null);
+  const [viewingPdfDoc, setViewingPdfDoc] = useState<CertidaoDocument | null>(null);
 
   // PDF Reading & Review Queue State ("CONFERIR DADOS")
   const [analyzingDocId, setAnalyzingDocId] = useState<string | null>(null);
@@ -1570,7 +1644,7 @@ export default function App() {
             if (c.id !== item.matchedCompanyId) return c;
             const updatedComp = { ...c };
             for (const diff of confirmedDiffs) {
-              updatedComp[diff.field] = diff.proposedValue;
+              (updatedComp as any)[diff.field] = diff.proposedValue;
               if (!updatedFieldsSummary.includes(diff.label)) {
                 updatedFieldsSummary.push(diff.label);
               }
@@ -2097,16 +2171,103 @@ export default function App() {
   };
 
   const handleViewAttachment = async (doc: CertidaoDocument) => {
-    if (doc.fileType === 'drive' && doc.driveUrl) {
-      setPreviewModal({ doc, dataUrl: null });
-      return;
+    let dataUrl = doc.fileData;
+    if (!dataUrl && doc.fileType === 'local') {
+      dataUrl = (await getAttachmentData(doc.id)) || undefined;
     }
-    if (doc.fileType === 'local') {
-      const dataUrl = await getAttachmentData(doc.id);
-      setPreviewModal({ doc, dataUrl });
-      return;
+    setViewingPdfDoc({ ...doc, fileData: dataUrl });
+  };
+
+  const handleConfirmDeletePdf = async (docId: string, clearExtractedFields: boolean) => {
+    try {
+      await deleteAttachmentData(docId);
+      setDocuments((prev) =>
+        prev.map((d) => {
+          if (d.id !== docId) return d;
+          const updated: CertidaoDocument = {
+            ...d,
+            fileName: undefined,
+            fileMimeType: undefined,
+            fileSize: undefined,
+            fileData: undefined,
+            fileUrl: undefined,
+            fileType: 'none',
+            pdfAnalysisConfidence: undefined,
+            updatedAt: new Date().toISOString(),
+          };
+
+          if (clearExtractedFields) {
+            updated.controlCode = '';
+            updated.authenticityCode = '';
+            updated.certificateNumber = '';
+            updated.protocolNumber = '';
+            updated.issueDate = '';
+            updated.expirationDate = '';
+            updated.pdfPopulatedFields = [];
+          }
+
+          return updated;
+        })
+      );
+      showToast(
+        clearExtractedFields
+          ? 'Arquivo PDF removido e dados extraídos limpos com sucesso.'
+          : 'Arquivo PDF removido com sucesso. Certidão e prazos mantidos.'
+      );
+    } catch (err) {
+      console.error('Erro ao excluir PDF:', err);
+      showToast('Falha ao excluir o arquivo PDF.');
     }
-    openEditModal(doc);
+  };
+
+  const handleSaveCompanyFromManagement = (comp: CompanyBasicProfile, isNew: boolean) => {
+    const profileComp: CompanyProfile = {
+      ...comp,
+      companyName: comp.companyName || (comp as any).corporateName || 'Nova Empresa',
+    };
+
+    if (isNew) {
+      setCompanies((prev) => [...prev, profileComp]);
+      const newDocs = buildDocumentsFromConfiguredModels(profileComp, settings);
+      setDocuments((prev) => [...prev, ...newDocs]);
+      setSelectedCompanyId(profileComp.id);
+      showToast(`Empresa "${profileComp.companyName}" cadastrada com sucesso!`);
+    } else {
+      setCompanies((prev) => prev.map((c) => (c.id === profileComp.id ? profileComp : c)));
+      showToast(`Empresa "${profileComp.companyName}" atualizada com sucesso!`);
+    }
+  };
+
+  const handleDeleteCompanyFromManagement = async (companyId: string) => {
+    const compDocs = documents.filter((d) => d.companyId === companyId);
+    for (const doc of compDocs) {
+      await deleteAttachmentData(doc.id).catch(() => {});
+    }
+    setDocuments((prev) => prev.filter((d) => d.companyId !== companyId));
+    setCompanies((prev) => {
+      const nextList = prev.filter((c) => c.id !== companyId);
+      if (selectedCompanyId === companyId) {
+        setSelectedCompanyId(nextList[0]?.id || '');
+      }
+      return nextList;
+    });
+    setDocumentHistory((prev) => prev.filter((h) => h.companyId !== companyId));
+    showToast('Empresa e todos os seus registros foram excluídos definitivamente.');
+  };
+
+  const handleArchiveCompanyFromManagement = (companyId: string, archive: boolean) => {
+    setCompanies((prev) =>
+      prev.map((c) =>
+        c.id === companyId
+          ? {
+              ...c,
+              isArchived: archive,
+              archivedAt: archive ? new Date().toISOString() : undefined,
+            }
+          : c
+      )
+    );
+    showToast(archive ? 'Empresa arquivada.' : 'Empresa restaurada com sucesso!');
   };
 
   const handleDownloadAttachment = async (doc: {
@@ -2378,6 +2539,18 @@ export default function App() {
           </button>
           <button
             type="button"
+            onClick={() => setActiveSection('companies')}
+            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer flex items-center gap-1.5 ${
+              activeSection === 'companies'
+                ? 'border-emerald-600 text-emerald-700 dark:text-emerald-300 dark:border-emerald-400 font-bold'
+                : 'border-transparent hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <Building2 className="w-3.5 h-3.5 text-emerald-500" />
+            Central de Empresas ({companies.filter((c) => !c.isArchived).length})
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveSection('pendencias')}
             className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer flex items-center gap-1 ${
               activeSection === 'pendencias'
@@ -2386,7 +2559,7 @@ export default function App() {
             }`}
           >
             <ListChecks className="w-3.5 h-3.5 text-amber-500" />
-            Central de Pendências (
+            Pendências (
             {summaryCounts.vencido +
               summaryCounts.atencao +
               summaryCounts.sem_data +
@@ -2410,6 +2583,21 @@ export default function App() {
           </button>
           <button
             type="button"
+            onClick={() => {
+              setSettingsInitialTab(undefined);
+              setActiveSection('settings');
+            }}
+            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer flex items-center gap-1.5 ${
+              activeSection === 'settings'
+                ? 'border-amber-500 text-amber-600 dark:text-amber-300 dark:border-amber-400 font-bold'
+                : 'border-transparent hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <Settings className="w-3.5 h-3.5 text-amber-400 animate-spin-slow" />
+            Configurações
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveSection('company_db')}
             className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
               activeSection === 'company_db'
@@ -2417,7 +2605,7 @@ export default function App() {
                 : 'border-transparent hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            Banco de Empresas ({companies.length})
+            Ficha Cadastral
           </button>
           <button
             type="button"
@@ -2428,7 +2616,7 @@ export default function App() {
                 : 'border-transparent hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            Links & Adaptadores
+            Portais & Links
           </button>
           <button
             type="button"
@@ -2439,15 +2627,34 @@ export default function App() {
                 : 'border-transparent hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            Backup e Planilha
+            Backup & Planilha
           </button>
         </nav>
 
         <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
+            onClick={() => setDarkMode(!darkMode)}
+            className="p-2 rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+            title="Alternar tema claro/escuro"
+          >
+            {darkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setSettingsInitialTab(undefined);
+              setActiveSection('settings');
+            }}
+            className="p-2 rounded-lg text-slate-500 hover:text-amber-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+            title="Abrir Central de Configurações"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
             onClick={openCreateModal}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-sm"
           >
             <Plus className="w-4 h-4" />
             Nova Certidão
@@ -2901,12 +3108,32 @@ export default function App() {
         ==================================================================== */}
         {activeSection === 'dashboard' && (
           <section className="space-y-3">
-            {/* Barra de Importação em Lote Drag & Drop */}
-            <BatchPdfImportView
-              isProcessing={isSmartReadingBatch}
-              progressText={readingProgressText}
-              onSelectFiles={(files, useAi) => handleSmartUploadAndMatch(files, useAi)}
-            />
+            {companies.length === 0 ? (
+              <div className="p-12 text-center bg-white dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-800 rounded-2xl shadow-sm">
+                <Building2 className="w-16 h-16 text-slate-400 dark:text-slate-600 mx-auto mb-3" />
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Nenhuma empresa cadastrada no sistema
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto mt-1 mb-6">
+                  Você removeu as empresas anteriores. O sistema está limpo e pronto para o cadastro das suas empresas reais.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setActiveSection('companies')}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-lg shadow-emerald-600/20 transition cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  + Cadastrar Primeira Empresa
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Barra de Importação em Lote Drag & Drop */}
+                <BatchPdfImportView
+                  isProcessing={isSmartReadingBatch}
+                  progressText={readingProgressText}
+                  onSelectFiles={(files, useAi) => handleSmartUploadAndMatch(files, useAi)}
+                />
 
             {/* Barra de Busca e Filtro Rápido */}
             <div className="p-3.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
@@ -3385,6 +3612,14 @@ export default function App() {
                                     }}
                                   />
                                 </label>
+                                <button
+                                  type="button"
+                                  onClick={() => setDeletingPdfDoc(doc)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-500 bg-slate-100 dark:bg-slate-800 rounded-lg cursor-pointer transition"
+                                  title="Excluir apenas o arquivo PDF (mantém certidão e prazos)"
+                                >
+                                  <FileX className="w-3.5 h-3.5" />
+                                </button>
                               </>
                             ) : (
                               <label
@@ -3514,6 +3749,59 @@ export default function App() {
                 })
               )}
             </div>
+          </>
+        )}
+      </section>
+    )}
+
+        {/* ====================================================================
+            VIEW: CENTRAL DE GERENCIAMENTO DE EMPRESAS
+        ==================================================================== */}
+        {activeSection === 'companies' && (
+          <section className="space-y-4">
+            <CompanyManagementView
+              companies={companies}
+              documents={documents}
+              activeCompanyId={selectedCompanyId}
+              settings={settings}
+              onSelectCompany={(compId) => {
+                setSelectedCompanyId(compId);
+                setActiveSection('dashboard');
+              }}
+              onSaveCompany={handleSaveCompanyFromManagement}
+              onDeleteCompany={handleDeleteCompanyFromManagement}
+              onArchiveCompany={handleArchiveCompanyFromManagement}
+              onOpenSettings={(tab) => {
+                setSettingsInitialTab(tab);
+                setActiveSection('settings');
+              }}
+            />
+          </section>
+        )}
+
+        {/* ====================================================================
+            VIEW: CENTRAL DE CONFIGURAÇÕES (PERSONALIZAÇÃO COMPLETA)
+        ==================================================================== */}
+        {activeSection === 'settings' && (
+          <section className="space-y-4">
+            <SettingsCenterView
+              settings={settings}
+              companies={companies}
+              onUpdateSettings={(updated) => {
+                setSettings(updated);
+                if (updated.appearance.theme === 'dark' || updated.appearance.theme === 'light') {
+                  setDarkMode(updated.appearance.theme === 'dark');
+                }
+                showToast('Configurações atualizadas com sucesso!');
+              }}
+              onResetSettings={() => {
+                const fresh = buildDefaultAppSettings();
+                setSettings(fresh);
+                showToast('Configurações restauradas para o padrão de fábrica.');
+              }}
+              onClose={() => setActiveSection('dashboard')}
+              initialTab={settingsInitialTab as any}
+            />
           </section>
         )}
 
@@ -5020,6 +5308,35 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ====================================================================
+          MODAL: EXCLUIR APENAS PDF (COM ESCOLHA DEDICADA)
+      ==================================================================== */}
+      <DeletePdfModal
+        isOpen={Boolean(deletingPdfDoc)}
+        doc={deletingPdfDoc}
+        onClose={() => setDeletingPdfDoc(null)}
+        onConfirm={(docId, clearExtracted) => handleConfirmDeletePdf(docId, clearExtracted)}
+      />
+
+      {/* ====================================================================
+          MODAL: VISUALIZADOR INTEGRADO DE PDF (PREVIEW + AÇÕES)
+      ==================================================================== */}
+      <PdfViewerModal
+        isOpen={Boolean(viewingPdfDoc)}
+        doc={viewingPdfDoc}
+        companyName={companies.find((c) => c.id === viewingPdfDoc?.companyId)?.companyName}
+        onClose={() => setViewingPdfDoc(null)}
+        onDownload={(doc) => handleDownloadAttachment(doc)}
+        onRequestReplace={(doc) => {
+          setViewingPdfDoc(null);
+          openQuickRenew(doc);
+        }}
+        onRequestDeletePdf={(doc) => {
+          setViewingPdfDoc(null);
+          setDeletingPdfDoc(doc);
+        }}
+      />
 
       {/* FLOATING TOAST */}
       {toastMessage && (

@@ -24,6 +24,23 @@ export function formatCEP(val: string | undefined | null): string {
   return `${digits.slice(0, 5)}-${digits.slice(5, 8)}`;
 }
 
+export function formatPhone(val: string | undefined | null): string {
+  const digits = onlyDigits(val).slice(0, 11);
+  if (digits.length === 11) {
+    return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7, 11)}`;
+  }
+  if (digits.length === 10) {
+    return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6, 10)}`;
+  }
+  return val || '';
+}
+
+export const isValidCnpj = isValidCNPJ;
+export const formatCnpj = formatCNPJ;
+export const formatCep = formatCEP;
+export const isValidCpf = isValidCPF;
+export const formatCpf = formatCPF;
+
 /**
  * Valida CNPJ matematicamente (14 dígitos + dígitos verificadores módulo 11).
  */

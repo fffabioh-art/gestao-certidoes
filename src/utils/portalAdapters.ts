@@ -29,19 +29,41 @@ export interface CompanyBasicProfile {
   municipalRegistration: string;
   nire: string;
   cnaeMain: string;
+  legalNature?: string;
+  openingDate?: string;
+  shareCapital?: string;
+  companySize?: string;
+  cadastralSituation?: string;
   cityState: string;
+  uf?: string;
   cep: string;
   address: string;
+  addressNumber?: string;
+  addressComplement?: string;
+  neighborhood?: string;
   email: string;
   phone: string;
+  whatsapp?: string;
+  website?: string;
   partnerName: string;
   partnerCpf: string;
   partnerRg: string;
   partnerBirthDate: string;
+  partnerRole?: string;
+  partnerPhone?: string;
+  partnerEmail?: string;
   techResponsibleName: string;
   techResponsibleCouncil: string;
   techResponsibleCpf: string;
+  techResponsibleRegNumber?: string;
+  techResponsibleSpecialty?: string;
+  techResponsibleValidUntil?: string;
   portalAccessNotes: string;
+  generalNotes?: string;
+  adminNotes?: string;
+  customFields?: Record<string, string>;
+  isArchived?: boolean;
+  archivedAt?: string;
 }
 
 export interface PortalAdapterConfig {
