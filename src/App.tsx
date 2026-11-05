@@ -37,409 +37,60 @@ import {
   KeyRound,
   Sparkles,
   FileScan,
-  Loader2
+  Loader2,
+  History,
+  ListChecks,
 } from 'lucide-react';
-
-// ============================================================================
-// TYPES & INTERFACES
-// ============================================================================
-
-export type DocumentCategory =
-  | 'Fiscais e Trabalhistas'
-  | 'Alvarás, Licenças e Conselhos'
-  | 'Societário, Contábil e Qualificação Técnica';
-
-export type ComputedStatus = 'vigente' | 'atencao' | 'vencido' | 'permanente';
-
-export type AutoFillFieldKey =
-  | 'cnpj_num'
-  | 'cnpj_fmt'
-  | 'ie_num'
-  | 'ie_fmt'
-  | 'im_num'
-  | 'im_fmt'
-  | 'cpf_num'
-  | 'cpf_fmt'
-  | 'nire'
-  | 'council'
-  | 'email'
-  | 'razao';
-
-export interface CompanyProfile {
-  id: string;
-  companyName: string; // Razão Social
-  tradeName: string; // Nome Fantasia
-  cnpj: string; // 12.345.678/0001-90
-  stateRegistration: string; // IE SEFAZ-PI
-  municipalRegistration: string; // IM / CMC Prefeitura
-  nire: string; // NIRE JUCEPI
-  cnaeMain: string; // CNAE Principal
-  cityState: string; // Teresina - PI
-  cep: string;
-  address: string;
-  email: string; // E-mail usado para receber certidões (TJPI, Prefeituras, etc.)
-  phone: string;
-  partnerName: string; // Sócio Administrador / Representante Legal
-  partnerCpf: string; // CPF do Sócio
-  partnerRg: string; // RG do Sócio
-  partnerBirthDate: string; // Data de Nascimento do Sócio (YYYY-MM-DD)
-  techResponsibleName: string; // Responsável Técnico (Químico/Engenheiro/Biólogo)
-  techResponsibleCouncil: string; // Registro CRQ / CREA-PI / CRBio
-  techResponsibleCpf: string; // CPF do RT
-  portalAccessNotes: string; // Senhas / Códigos de acesso nos portais
-}
-
-export interface CertidaoDocument {
-  id: string;
-  companyId: string;
-  templateKey?: string;
-  name: string;
-  category: DocumentCategory;
-  issuer: string;
-  emitterUrl: string;
-  registrationCode: string;
-  primaryAutoFillField?: AutoFillFieldKey;
-  portalFieldsHint?: string;
-  issueDate: string; // YYYY-MM-DD or ''
-  validityDays: number | '';
-  expirationDate: string; // YYYY-MM-DD or ''
-  isPermanent: boolean;
-  notes: string;
-  fileType: 'none' | 'local' | 'drive';
-  fileName?: string;
-  fileMimeType?: string;
-  fileSize?: number;
-  driveUrl?: string;
-  updatedAt: string;
-}
-
-export interface ExtractedDocumentData {
-  documentTitle?: string;
-  matchedTemplateKey?: string;
-  category?: DocumentCategory;
-  issuer?: string;
-  issueDate?: string;
-  validityDays?: number;
-  expirationDate?: string;
-  isPermanent?: boolean;
-  controlCode?: string;
-  summaryNotes?: string;
-  companyData?: Partial<CompanyProfile>;
-}
-
-// ============================================================================
-// STRING & DIGITS HELPERS FOR AUTO-FILL
-// ============================================================================
-
-function onlyDigits(val: string | undefined): string {
-  return (val || '').replace(/\D+/g, '');
-}
-
-export function resolveCompanyFieldMap(comp: CompanyProfile): Record<
+import {
+  CertidaoDocument,
+  CompanyFieldDiff,
+  CompanyProfile,
+  ComputedStatus,
+  DocumentCategory,
+  DocumentHistoryEntry,
+  PendingPdfReviewItem,
+} from './types/domain';
+import {
+  onlyDigits,
+  formatCNPJ,
+  isValidCNPJ,
+  isValidCPF,
+  computeDocumentFingerprint,
+} from './utils/validators';
+import {
   AutoFillFieldKey,
-  { label: string; value: string; description: string }
-> {
-  return {
-    cnpj_num: {
-      label: 'CNPJ (Só Números)',
-      value: onlyDigits(comp.cnpj),
-      description: 'Ideal para Receita Federal, TST, Caixa (FGTS) e SEFAZ-PI',
-    },
-    cnpj_fmt: {
-      label: 'CNPJ (Com Pontos)',
-      value: comp.cnpj || '',
-      description: 'Formato 00.000.000/0001-00',
-    },
-    ie_num: {
-      label: 'Inscrição Estadual (Só Números)',
-      value: onlyDigits(comp.stateRegistration),
-      description: 'SEFAZ-PI / SINTEGRA sem pontuação',
-    },
-    ie_fmt: {
-      label: 'Inscrição Estadual (Formatada)',
-      value: comp.stateRegistration || '',
-      description: 'Inscrição Estadual SEFAZ-PI',
-    },
-    im_num: {
-      label: 'Inscrição Municipal (Só Números)',
-      value: onlyDigits(comp.municipalRegistration),
-      description: 'Prefeitura / SEMF Teresina sem traço',
-    },
-    im_fmt: {
-      label: 'Inscrição Municipal (CMC)',
-      value: comp.municipalRegistration || '',
-      description: 'Cadastro Mercantil do Contribuinte',
-    },
-    cpf_num: {
-      label: 'CPF do Sócio (Só Números)',
-      value: onlyDigits(comp.partnerCpf),
-      description: 'Exigido no TJPI, Receita, JUCEPI e Prefeituras',
-    },
-    cpf_fmt: {
-      label: 'CPF do Sócio (Com Pontos)',
-      value: comp.partnerCpf || '',
-      description: `Sócio: ${comp.partnerName || 'Representante'}`,
-    },
-    nire: {
-      label: 'NIRE (JUCEPI)',
-      value: comp.nire || '',
-      description: 'Número de Identificação do Registro de Empresas',
-    },
-    council: {
-      label: 'Registro no Conselho (CREA/CRQ/CRBio)',
-      value: comp.techResponsibleCouncil || '',
-      description: `RT: ${comp.techResponsibleName || 'Responsável Técnico'}`,
-    },
-    email: {
-      label: 'E-mail para Certidões',
-      value: comp.email || '',
-      description: 'Para envio de certidões (TJPI, Prefeituras, etc.)',
-    },
-    razao: {
-      label: 'Razão Social',
-      value: comp.companyName || '',
-      description: 'Nome empresarial completo',
-    },
-  };
-}
+  OFFICIAL_PORTAL_ADAPTERS,
+  buildCleanTargetUrl,
+  dispatchAutofillBridgeEvent,
+  generateSafeBookmarkletCode,
+  generateSafeTampermonkeyScript,
+  resolveCompanyFieldMap,
+} from './utils/portalAdapters';
+import { analyzeDocumentSmart } from './utils/pdfAnalyzer';
+import { ReviewExtractionModal } from './components/ReviewExtractionModal';
+import { DocumentHistoryView } from './components/DocumentHistoryView';
+import { PendenciasCenterView } from './components/PendenciasCenterView';
+import { BatchPdfImportView } from './components/BatchPdfImportView';
+import { AssistedEmissionDrawer } from './components/AssistedEmissionDrawer';
 
-function buildAutoFillTargetUrl(rawUrl: string, comp: CompanyProfile): string {
-  if (!rawUrl) return '';
-  const map = resolveCompanyFieldMap(comp);
-  let url = rawUrl
-    .replace(/\{CNPJ_NUM\}/gi, encodeURIComponent(map.cnpj_num.value))
-    .replace(/\{CNPJ\}/gi, encodeURIComponent(map.cnpj_fmt.value))
-    .replace(/\{IE_NUM\}/gi, encodeURIComponent(map.ie_num.value))
-    .replace(/\{IE\}/gi, encodeURIComponent(map.ie_fmt.value))
-    .replace(/\{IM_NUM\}/gi, encodeURIComponent(map.im_num.value))
-    .replace(/\{IM\}/gi, encodeURIComponent(map.im_fmt.value))
-    .replace(/\{CPF_NUM\}/gi, encodeURIComponent(map.cpf_num.value))
-    .replace(/\{CPF\}/gi, encodeURIComponent(map.cpf_fmt.value))
-    .replace(/\{EMAIL\}/gi, encodeURIComponent(map.email.value))
-    .replace(/\{NIRE\}/gi, encodeURIComponent(map.nire.value));
+export type {
+  DocumentCategory,
+  ComputedStatus,
+  AutoFillFieldKey,
+  CompanyProfile,
+  CertidaoDocument,
+};
 
-  const payload = {
-    cnpj_num: map.cnpj_num.value,
-    cnpj_fmt: map.cnpj_fmt.value,
-    ie_num: map.ie_num.value,
-    ie_fmt: map.ie_fmt.value,
-    im_num: map.im_num.value,
-    im_fmt: map.im_fmt.value,
-    cpf_num: map.cpf_num.value,
-    cpf_fmt: map.cpf_fmt.value,
-    nire: map.nire.value,
-    council: map.council.value,
-    email: map.email.value,
-    razao: comp.companyName,
-    socio: comp.partnerName,
-    nasc: comp.partnerBirthDate,
-    cep: onlyDigits(comp.cep),
-    tel: onlyDigits(comp.phone),
-  };
-
-  try {
-    const encodedPayload = encodeURIComponent(JSON.stringify(payload));
-    if (!url.includes('#')) {
-      url = `${url}#mago_autofill=${encodedPayload}`;
-    }
-  } catch {
-    // ignore
-  }
-
-  return url;
+function buildAutoFillTargetUrl(rawUrl: string, _comp?: CompanyProfile): string {
+  return buildCleanTargetUrl(rawUrl);
 }
 
 function generateBookmarkletCode(comp: CompanyProfile): string {
-  const data = {
-    cnpjNum: onlyDigits(comp.cnpj),
-    cnpjFmt: comp.cnpj,
-    ieNum: onlyDigits(comp.stateRegistration),
-    imNum: onlyDigits(comp.municipalRegistration),
-    cpfNum: onlyDigits(comp.partnerCpf),
-    cpfFmt: comp.partnerCpf,
-    nire: comp.nire,
-    council: comp.techResponsibleCouncil,
-    email: comp.email,
-    razao: comp.companyName,
-    socio: comp.partnerName,
-    tel: onlyDigits(comp.phone),
-    cep: onlyDigits(comp.cep),
-  };
-
-  const scriptBody = `(function(){
-    var D=${JSON.stringify(data)};
-    function setVal(el,val){
-      if(!el||!val)return false;
-      el.focus();
-      var setter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');
-      if(setter&&setter.set){setter.set.call(el,val);}else{el.value=val;}
-      el.dispatchEvent(new Event('input',{bubbles:true}));
-      el.dispatchEvent(new Event('change',{bubbles:true}));
-      el.dispatchEvent(new Event('keyup',{bubbles:true}));
-      el.dispatchEvent(new Event('blur',{bubbles:true}));
-      return true;
-    }
-    var inputs=Array.from(document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([disabled]):not([readonly])'));
-    var filled=0;
-    var captchaInput=null;
-    inputs.forEach(function(inp){
-      var attr=((inp.name||'')+' '+(inp.id||'')+' '+(inp.placeholder||'')+' '+(inp.title||'')+' '+(inp.className||'')).toLowerCase();
-      var lbl='';
-      if(inp.id){var l=document.querySelector('label[for="'+inp.id+'"]');if(l)lbl=l.innerText.toLowerCase();}
-      if(!lbl&&inp.parentElement)lbl=(inp.parentElement.innerText||'').toLowerCase().slice(0,120);
-      var meta=attr+' '+lbl;
-      var max=inp.maxLength||999;
-      if(/captcha|codigo|seguranca|imagem|desafio|verificacao|caracteres|letras/.test(meta)){
-        if(!captchaInput)captchaInput=inp;
-        return;
-      }
-      if(/cnpj|contribuinte|ni\\b|identificacao|documento|empregador/.test(meta)){
-        setVal(inp,max===14?D.cnpjNum:(/00\\.000/.test(meta)?D.cnpjFmt:D.cnpjNum));filled++;return;
-      }
-      if(/estadual|ie\\b|cgf|sintegra|sefaz/.test(meta)){
-        setVal(inp,D.ieNum);filled++;return;
-      }
-      if(/municipal|cmc|im\\b|inscricao_mun|mobiliari/.test(meta)){
-        setVal(inp,D.imNum);filled++;return;
-      }
-      if(/cpf|solicitante|representante/.test(meta)){
-        setVal(inp,max===11?D.cpfNum:D.cpfNum);filled++;return;
-      }
-      if(/email|e-mail|correio/.test(meta)){
-        setVal(inp,D.email);filled++;return;
-      }
-      if(/nire/.test(meta)){
-        setVal(inp,D.nire);filled++;return;
-      }
-      if(/crea|crq|crbio|conselho|registro/.test(meta)){
-        setVal(inp,D.council||D.cnpjNum);filled++;return;
-      }
-      if(/razao|nome_empres|requerente|interessado|nome/.test(meta)){
-        setVal(inp,D.razao);filled++;return;
-      }
-      if(/cep/.test(meta)){
-        setVal(inp,D.cep);filled++;return;
-      }
-      if(/telefone|celular|fone/.test(meta)){
-        setVal(inp,D.tel);filled++;return;
-      }
-    });
-    if(filled===0&&inputs.length>0){
-      var firstText=inputs.find(function(i){return i.type==='text'||i.type==='tel'||i.type==='number'||!i.type;});
-      if(firstText){setVal(firstText,D.cnpjNum);filled++;}
-    }
-    if(captchaInput){
-      captchaInput.focus();
-      captchaInput.style.outline='3px solid #2563eb';
-    }else if(inputs.length>1){
-      var nextEmpty=inputs.find(function(i){return !i.value;});
-      if(nextEmpty){nextEmpty.focus();nextEmpty.style.outline='3px solid #2563eb';}
-    }
-  })();`;
-
-  return `javascript:${encodeURIComponent(scriptBody.replace(/\s+/g, ' ').trim())}`;
+  return generateSafeBookmarkletCode(comp);
 }
 
 function generateTampermonkeyScript(): string {
-  return `// ==UserScript==
-// @name         Mago das Licitações - AutoPreenchimento de Portais (Piauí e Federal)
-// @namespace    https://magodaslicitacoes.local/
-// @version      2.0
-// @description  Preenche automaticamente CNPJ, IE, IM, CPF, Razão Social e E-mail nos sites de certidões ao clicar em Emitir no Mago das Licitações e foca direto no Captcha!
-// @match        *://*.gov.br/*
-// @match        *://*.jus.br/*
-// @match        *://*.caixa.gov.br/*
-// @match        *://*.crea-pi.org.br/*
-// @match        *://*/*
-// @grant        none
-// ==/UserScript==
-
-(function() {
-  'use strict';
-
-  const hash = window.location.hash || '';
-  if (hash.includes('mago_autofill=')) {
-    try {
-      const encoded = hash.split('mago_autofill=')[1].split('&')[0];
-      const payload = JSON.parse(decodeURIComponent(encoded));
-      sessionStorage.setItem('MAGO_AUTOFILL_DATA', JSON.stringify(payload));
-      history.replaceState(null, '', window.location.pathname + window.location.search);
-    } catch (e) {
-      console.warn('Erro ao ler dados do Mago das Licitações:', e);
-    }
-  }
-
-  const rawSaved = sessionStorage.getItem('MAGO_AUTOFILL_DATA');
-  if (!rawSaved) return;
-  const D = JSON.parse(rawSaved);
-
-  function setNativeValue(el, val) {
-    if (!el || !val) return;
-    el.focus();
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
-    if (setter && setter.set) {
-      setter.set.call(el, val);
-    } else {
-      el.value = val;
-    }
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-    el.dispatchEvent(new Event('keyup', { bubbles: true }));
-    el.dispatchEvent(new Event('blur', { bubbles: true }));
-  }
-
-  function runAutoFill() {
-    const inputs = Array.from(document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([disabled]):not([readonly])'));
-    if (!inputs.length) return;
-
-    let captchaField = null;
-
-    inputs.forEach((inp) => {
-      if (inp.dataset.magoFilled === '1') return;
-      const attr = ((inp.name || '') + ' ' + (inp.id || '') + ' ' + (inp.placeholder || '') + ' ' + (inp.title || '') + ' ' + (inp.className || '')).toLowerCase();
-      let lbl = '';
-      if (inp.id) {
-        const l = document.querySelector('label[for="' + inp.id + '"]');
-        if (l) lbl = l.innerText.toLowerCase();
-      }
-      if (!lbl && inp.parentElement) lbl = (inp.parentElement.innerText || '').toLowerCase().slice(0, 120);
-      const meta = attr + ' ' + lbl;
-
-      if (/captcha|codigo|seguranca|imagem|desafio|verificacao|caracteres|letras/.test(meta)) {
-        if (!captchaField) captchaField = inp;
-        return;
-      }
-
-      if (/cnpj|contribuinte|ni\\b|identificacao|documento|empregador/.test(meta)) {
-        setNativeValue(inp, D.cnpj_num);
-        inp.dataset.magoFilled = '1';
-      } else if (/estadual|ie\\b|cgf|sintegra|sefaz/.test(meta)) {
-        setNativeValue(inp, D.ie_num);
-        inp.dataset.magoFilled = '1';
-      } else if (/municipal|cmc|im\\b|mobiliari/.test(meta)) {
-        setNativeValue(inp, D.im_num);
-        inp.dataset.magoFilled = '1';
-      } else if (/cpf|solicitante|representante/.test(meta)) {
-        setNativeValue(inp, D.cpf_num);
-        inp.dataset.magoFilled = '1';
-      } else if (/email|e-mail|correio/.test(meta)) {
-        setNativeValue(inp, D.email);
-        inp.dataset.magoFilled = '1';
-      } else if (/razao|requerente|interessado|nome_empres/.test(meta)) {
-        setNativeValue(inp, D.razao);
-        inp.dataset.magoFilled = '1';
-      }
-    });
-
-    if (captchaField && document.activeElement !== captchaField) {
-      captchaField.focus();
-      captchaField.style.outline = '3px solid #2563eb';
-    }
-  }
-
-  setTimeout(runAutoFill, 400);
-  setTimeout(runAutoFill, 1200);
-})();`;
+  return generateSafeTampermonkeyScript();
 }
 
 // ============================================================================
@@ -1106,6 +757,18 @@ function evaluateDocumentStatus(
   doc: CertidaoDocument,
   warningThresholdDays: number
 ): StatusEvaluation {
+  if (doc.awaitingReview) {
+    return {
+      status: 'aguardando_conferencia',
+      daysRemaining: diffDaysFromToday(doc.expirationDate),
+      label: 'Aguard. Conferência',
+      countdownText: doc.expirationDate
+        ? `Venc: ${formatDateBR(doc.expirationDate)}`
+        : 'Revisar dados',
+      sortWeight: -50000,
+    };
+  }
+
   if (doc.isPermanent) {
     return {
       status: 'permanente',
@@ -1118,13 +781,14 @@ function evaluateDocumentStatus(
 
   const days = diffDaysFromToday(doc.expirationDate);
 
+  // Um documento sem data de vencimento NÃO deve ser classificado automaticamente como vencido!
   if (days === null) {
     return {
-      status: 'vencido',
+      status: 'sem_data',
       daysRemaining: null,
-      label: 'Sem Data',
-      countdownText: 'Configurar vencimento',
-      sortWeight: -99999,
+      label: 'Sem Data Informada',
+      countdownText: 'Informar vencimento',
+      sortWeight: 50000,
     };
   }
 
@@ -1152,7 +816,7 @@ function evaluateDocumentStatus(
     return {
       status: 'atencao',
       daysRemaining: days,
-      label: 'A Vencer',
+      label: 'Próximo ao Venc.',
       countdownText: `Faltam ${days}d`,
       sortWeight: days,
     };
@@ -1168,25 +832,72 @@ function evaluateDocumentStatus(
 }
 
 // ============================================================================
-// SERVER API HELPER: READ PDF / IMAGE VIA GEMINI
+// HELPER: COMPUTE DIFFS BETWEEN CURRENT COMPANY PROFILE AND EXTRACTED PDF DATA
 // ============================================================================
 
-async function analyzeDocumentViaServer(
-  dataUrl: string,
-  fileName: string,
-  mode: 'certificate' | 'company_profile' | 'auto_match'
-): Promise<ExtractedDocumentData | null> {
-  const res = await fetch('/api/analyze-document', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ dataUrl, fileName, mode }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'Falha ao ler documento.' }));
-    throw new Error(err.error || 'Erro ao analisar o PDF.');
+const COMPANY_FIELD_LABELS: { field: keyof CompanyProfile; label: string }[] = [
+  { field: 'companyName', label: 'Razão Social' },
+  { field: 'tradeName', label: 'Nome Fantasia' },
+  { field: 'cnpj', label: 'CNPJ' },
+  { field: 'stateRegistration', label: 'Inscrição Estadual (IE)' },
+  { field: 'municipalRegistration', label: 'Inscrição Municipal (IM)' },
+  { field: 'nire', label: 'NIRE (JUCEPI)' },
+  { field: 'cnaeMain', label: 'CNAE Principal' },
+  { field: 'cityState', label: 'Município / UF' },
+  { field: 'cep', label: 'CEP' },
+  { field: 'address', label: 'Endereço' },
+  { field: 'email', label: 'E-mail' },
+  { field: 'phone', label: 'Telefone' },
+  { field: 'partnerName', label: 'Representante Legal / Sócio' },
+  { field: 'partnerCpf', label: 'CPF do Sócio' },
+  { field: 'techResponsibleName', label: 'Responsável Técnico' },
+  { field: 'techResponsibleCouncil', label: 'Registro no Conselho' },
+];
+
+function buildCompanyFieldDiffs(
+  company: CompanyProfile,
+  extractedData: Partial<CompanyProfile> | undefined
+): CompanyFieldDiff[] {
+  if (!extractedData) return [];
+  const diffs: CompanyFieldDiff[] = [];
+
+  for (const { field, label } of COMPANY_FIELD_LABELS) {
+    const proposed = (extractedData[field] || '').trim();
+    if (!proposed) continue;
+
+    const current = (company[field] || '').trim();
+    const isSameDigits =
+      (field === 'cnpj' || field === 'partnerCpf' || field === 'cep') &&
+      onlyDigits(current) === onlyDigits(proposed);
+
+    if (current.toLowerCase() === proposed.toLowerCase() || isSameDigits) {
+      continue;
+    }
+
+    const isPlaceholder =
+      !current ||
+      current.includes('Empresa 0') ||
+      current.includes('Clique') ||
+      current.includes('Editar na Ficha') ||
+      current.includes('Representante Legal Empresa');
+
+    diffs.push({
+      field,
+      label,
+      currentValue: current,
+      proposedValue: proposed,
+      // Sugere marcado por padrão apenas se o campo atual estiver vazio ou com texto placeholder inicial
+      selected: isPlaceholder,
+      isValidDocumentNumber:
+        field === 'cnpj'
+          ? isValidCNPJ(proposed)
+          : field === 'partnerCpf'
+          ? isValidCPF(proposed)
+          : null,
+    });
   }
-  const json = await res.json();
-  return (json.data as ExtractedDocumentData) || null;
+
+  return diffs;
 }
 
 // ============================================================================
@@ -1196,6 +907,7 @@ async function analyzeDocumentViaServer(
 const STORAGE_KEY_COMPANIES = 'mago_licitacoes_companies_v2';
 const STORAGE_KEY_ACTIVE_COMPANY = 'mago_licitacoes_active_comp_v2';
 const STORAGE_KEY_DOCS = 'mago_licitacoes_docs_v2';
+const STORAGE_KEY_HISTORY = 'mago_licitacoes_history_v1';
 const STORAGE_KEY_WARNING_DAYS = 'mago_licitacoes_warning_days_v2';
 const STORAGE_KEY_THEME = 'mago_licitacoes_theme_v1';
 
@@ -1217,7 +929,7 @@ export default function App() {
     }
   }, [darkMode]);
 
-  // Multi-company state
+  // Multi-company state (preservando integralmente os dados existentes)
   const [companies, setCompanies] = useState<CompanyProfile[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_COMPANIES);
@@ -1254,7 +966,7 @@ export default function App() {
     return companies.find((c) => c.id === selectedCompanyId) || companies[0];
   }, [companies, selectedCompanyId]);
 
-  // Warning threshold days
+  // Warning threshold days (60, 30, 15, 7, 1 dia)
   const [warningThresholdDays, setWarningThresholdDays] = useState<number>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_WARNING_DAYS);
     return saved ? Number(saved) || 30 : 30;
@@ -1264,7 +976,7 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY_WARNING_DAYS, String(warningThresholdDays));
   }, [warningThresholdDays]);
 
-  // Documents state
+  // Documents state (preservando integralmente os registros existentes)
   const [documents, setDocuments] = useState<CertidaoDocument[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_DOCS);
@@ -1284,18 +996,39 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY_DOCS, JSON.stringify(documents));
   }, [documents]);
 
+  // Document History state (preserva versões e PDFs anteriores)
+  const [documentHistory, setDocumentHistory] = useState<DocumentHistoryEntry[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_HISTORY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(documentHistory));
+  }, [documentHistory]);
+
   // Filtering, search & sorting
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | ComputedStatus>('all');
   const [categoryFilter, setCategoryFilter] = useState<'all' | DocumentCategory>('all');
   const [sortBy, setSortBy] = useState<'priority' | 'name' | 'category' | 'expiration'>('priority');
   const [activeSection, setActiveSection] = useState<
-    'dashboard' | 'company_db' | 'links' | 'backup'
+    'dashboard' | 'batch_import' | 'pendencias' | 'history' | 'company_db' | 'links' | 'backup'
   >('dashboard');
+  const [historyFilterDocId, setHistoryFilterDocId] = useState<string | null>(null);
 
-  // PDF Reading / Extraction Status State
+  // PDF Reading & Review Queue State ("CONFERIR DADOS")
   const [analyzingDocId, setAnalyzingDocId] = useState<string | null>(null);
   const [isSmartReadingBatch, setIsSmartReadingBatch] = useState(false);
+  const [readingProgressText, setReadingProgressText] = useState('');
+  const [pendingReviewItems, setPendingReviewItems] = useState<PendingPdfReviewItem[]>([]);
   const [lastExtractionSummary, setLastExtractionSummary] = useState<{
     fileName: string;
     documentTitle: string;
@@ -1314,7 +1047,7 @@ export default function App() {
     setToastMessage(msg);
     setTimeout(() => {
       setToastMessage((prev) => (prev === msg ? null : prev));
-    }, 4200);
+    }, 4500);
   };
 
   // Active Emission Assistant Drawer
@@ -1349,12 +1082,15 @@ export default function App() {
     newIssueDate: string;
     newValidityDays: number;
     newExpirationDate: string;
+    newControlCode: string;
+    newCertificateNumber: string;
+    newDocumentSituation: string;
     newDriveUrl: string;
     newFile?: File | null;
     extractedInfo?: string;
   } | null>(null);
   const [previewModal, setPreviewModal] = useState<{
-    doc: CertidaoDocument;
+    doc: { name: string; fileName?: string; fileMimeType?: string; driveUrl?: string; id?: string };
     dataUrl: string | null;
   } | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -1388,7 +1124,7 @@ export default function App() {
     }));
   }, [companyScopedDocuments, companies, activeCompany, warningThresholdDays]);
 
-  // Executive Summary counts
+  // Executive Summary counts (incluindo sem_data e aguardando_conferencia separados de vencido!)
   const summaryCounts = useMemo(() => {
     const counts = {
       total: enrichedDocuments.length,
@@ -1396,6 +1132,8 @@ export default function App() {
       atencao: 0,
       vencido: 0,
       permanente: 0,
+      sem_data: 0,
+      aguardando_conferencia: 0,
     };
     for (const item of enrichedDocuments) {
       counts[item.eval.status]++;
@@ -1410,7 +1148,7 @@ export default function App() {
       if (statusFilter !== 'all' && ev.status !== statusFilter) return false;
       if (categoryFilter !== 'all' && doc.category !== categoryFilter) return false;
       if (q) {
-        const hay = `${doc.name} ${doc.issuer} ${doc.category} ${doc.registrationCode} ${doc.notes} ${comp?.companyName || ''}`.toLowerCase();
+        const hay = `${doc.name} ${doc.issuer} ${doc.category} ${doc.registrationCode} ${doc.controlCode || ''} ${doc.certificateNumber || ''} ${doc.notes} ${comp?.companyName || ''}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -1421,8 +1159,10 @@ export default function App() {
         const rankOrder: Record<ComputedStatus, number> = {
           vencido: 1,
           atencao: 2,
-          vigente: 3,
-          permanente: 4,
+          aguardando_conferencia: 3,
+          sem_data: 4,
+          vigente: 5,
+          permanente: 6,
         };
         if (rankOrder[a.eval.status] !== rankOrder[b.eval.status]) {
           return rankOrder[a.eval.status] - rankOrder[b.eval.status];
@@ -1449,394 +1189,518 @@ export default function App() {
   }, [enrichedDocuments, searchQuery, statusFilter, categoryFilter, sortBy]);
 
   // ============================================================================
-  // HELPER: MERGE EXTRACTED COMPANY DATA INTO COMPANY DATABASE
+  // HELPER: ARCHIVE PREVIOUS DOCUMENT VERSION INTO HISTORY BEFORE UPDATING
   // ============================================================================
 
-  const mergeExtractedCompanyProfile = (
-    targetCompanyId: string,
-    extractedComp: Partial<CompanyProfile> | undefined
-  ): string[] => {
-    if (!extractedComp) return [];
-    const updatedFields: string[] = [];
+  const archiveDocumentVersionToHistory = async (
+    existingDoc: CertidaoDocument,
+    reason: string
+  ): Promise<void> => {
+    // Arquiva apenas se a certidão anterior já tinha uma data de emissão, código ou PDF anexado
+    if (
+      !existingDoc.issueDate &&
+      !existingDoc.expirationDate &&
+      existingDoc.fileType === 'none' &&
+      !existingDoc.controlCode
+    ) {
+      return;
+    }
 
-    setCompanies((prev) =>
-      prev.map((c) => {
-        if (c.id !== targetCompanyId) return c;
-        const next = { ...c };
+    const histId = `hist-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    let attachmentHistoryKey: string | undefined;
 
-        if (
-          extractedComp.companyName &&
-          extractedComp.companyName.trim().length > 3 &&
-          (c.companyName.includes('Empresa 0') || c.companyName.includes('Clique'))
-        ) {
-          next.companyName = extractedComp.companyName.trim();
-          updatedFields.push('Razão Social');
-        }
-        if (extractedComp.tradeName && !c.tradeName) {
-          next.tradeName = extractedComp.tradeName.trim();
-          updatedFields.push('Nome Fantasia');
-        }
-        if (extractedComp.cnpj && onlyDigits(extractedComp.cnpj).length === 14) {
-          next.cnpj = extractedComp.cnpj.trim();
-          updatedFields.push('CNPJ');
-        }
-        if (extractedComp.stateRegistration && extractedComp.stateRegistration.trim()) {
-          next.stateRegistration = extractedComp.stateRegistration.trim();
-          updatedFields.push('Inscrição Estadual (IE)');
-        }
-        if (extractedComp.municipalRegistration && extractedComp.municipalRegistration.trim()) {
-          next.municipalRegistration = extractedComp.municipalRegistration.trim();
-          updatedFields.push('Inscrição Municipal (IM)');
-        }
-        if (extractedComp.nire && extractedComp.nire.trim()) {
-          next.nire = extractedComp.nire.trim();
-          updatedFields.push('NIRE');
-        }
-        if (extractedComp.cnaeMain && extractedComp.cnaeMain.trim()) {
-          next.cnaeMain = extractedComp.cnaeMain.trim();
-          updatedFields.push('CNAE');
-        }
-        if (extractedComp.cep && extractedComp.cep.trim()) {
-          next.cep = extractedComp.cep.trim();
-          updatedFields.push('CEP');
-        }
-        if (extractedComp.address && extractedComp.address.trim()) {
-          next.address = extractedComp.address.trim();
-          updatedFields.push('Endereço');
-        }
-        if (extractedComp.cityState && extractedComp.cityState.trim()) {
-          next.cityState = extractedComp.cityState.trim();
-          updatedFields.push('Município/UF');
-        }
-        if (extractedComp.email && extractedComp.email.trim()) {
-          next.email = extractedComp.email.trim();
-          updatedFields.push('E-mail');
-        }
-        if (extractedComp.phone && extractedComp.phone.trim()) {
-          next.phone = extractedComp.phone.trim();
-          updatedFields.push('Telefone');
-        }
-        if (extractedComp.partnerName && extractedComp.partnerName.trim()) {
-          next.partnerName = extractedComp.partnerName.trim();
-          updatedFields.push('Sócio Administrador');
-        }
-        if (extractedComp.partnerCpf && extractedComp.partnerCpf.trim()) {
-          next.partnerCpf = extractedComp.partnerCpf.trim();
-          updatedFields.push('CPF do Sócio');
-        }
-        if (extractedComp.techResponsibleName && extractedComp.techResponsibleName.trim()) {
-          next.techResponsibleName = extractedComp.techResponsibleName.trim();
-          updatedFields.push('Responsável Técnico');
-        }
-        if (extractedComp.techResponsibleCouncil && extractedComp.techResponsibleCouncil.trim()) {
-          next.techResponsibleCouncil = extractedComp.techResponsibleCouncil.trim();
-          updatedFields.push('Registro no Conselho');
-        }
+    if (existingDoc.fileType === 'local') {
+      const prevDataUrl = await getAttachmentData(existingDoc.id);
+      if (prevDataUrl) {
+        attachmentHistoryKey = `hist-att-${histId}`;
+        await saveAttachmentData(attachmentHistoryKey, prevDataUrl);
+      }
+    }
 
-        return next;
-      })
-    );
+    const comp = companies.find((c) => c.id === existingDoc.companyId);
 
-    return updatedFields;
+    const entry: DocumentHistoryEntry = {
+      id: histId,
+      documentId: existingDoc.id,
+      companyId: existingDoc.companyId,
+      companyName: comp?.companyName || 'Empresa',
+      documentName: existingDoc.name,
+      templateKey: existingDoc.templateKey,
+      category: existingDoc.category,
+      issuer: existingDoc.issuer,
+      issueDate: existingDoc.issueDate,
+      validityDays: existingDoc.validityDays,
+      expirationDate: existingDoc.expirationDate,
+      certificateNumber: existingDoc.certificateNumber,
+      controlCode: existingDoc.controlCode,
+      documentSituation: existingDoc.documentSituation,
+      fileName: existingDoc.fileName,
+      fileMimeType: existingDoc.fileMimeType,
+      fileSize: existingDoc.fileSize,
+      attachmentHistoryKey,
+      driveUrl: existingDoc.driveUrl,
+      archivedAt: new Date().toISOString(),
+      replacementReason: reason,
+    };
+
+    setDocumentHistory((prev) => [entry, ...prev]);
   };
 
   // ============================================================================
-  // HANDLERS: AUTOMATIC PDF READING & DATA EXTRACTION
+  // HANDLERS: FREE SMART PDF READING + BATCH IMPORT + REVIEW ("CONFERIR DADOS")
   // ============================================================================
 
   /**
-   * 1. Anexar PDF direto em uma linha específica da lista:
-   * Salva o PDF no navegador E lê automaticamente as datas de emissão, vencimento,
-   * código de controle e dados da empresa!
+   * Processa 1 ou vários PDFs/imagens usando PDF.js + Tesseract.js local gratuito
+   * (e opcionalmente Gemini), identifica empresa + certidão, detecta duplicados
+   * e abre a tela de CONFERÊNCIA antes de salvar!
    */
-  const handleAttachFileToDoc = async (docId: string, file: File) => {
-    try {
-      setAnalyzingDocId(docId);
-      showToast(`Anexando e lendo automaticamente "${file.name}"...`);
+  const processFilesForReviewQueue = async (
+    rawFiles: FileList | File[],
+    options?: {
+      forceDocId?: string;
+      forceCompanyId?: string;
+      useGeminiComplement?: boolean;
+      mode?: 'certificate' | 'company_profile' | 'auto_match';
+    }
+  ) => {
+    const fileArray = Array.from(rawFiles);
+    if (fileArray.length === 0) return;
 
-      const dataUrl = await readFileAsDataURL(file);
-      await saveAttachmentData(docId, dataUrl);
+    setIsSmartReadingBatch(true);
+    if (options?.forceDocId) {
+      setAnalyzingDocId(options.forceDocId);
+    }
 
-      // Salva o anexo imediatamente
-      setDocuments((prev) =>
-        prev.map((d) =>
-          d.id === docId
-            ? {
-                ...d,
-                fileType: 'local',
-                fileName: file.name,
-                fileMimeType: file.type || 'application/pdf',
-                fileSize: file.size,
-                updatedAt: new Date().toISOString(),
-              }
-            : d
-        )
+    const newReviewItems: PendingPdfReviewItem[] = [];
+    const seenFingerprintsInBatch = new Set<string>();
+
+    for (let i = 0; i < fileArray.length; i++) {
+      const file = fileArray[i];
+      setReadingProgressText(
+        `Lendo arquivo ${i + 1} de ${fileArray.length}: "${file.name}"...`
       );
 
-      // Agora lê o conteúdo do PDF via servidor Gemini para extrair datas e dados
-      const targetDoc = documents.find((d) => d.id === docId);
-      const extracted = await analyzeDocumentViaServer(dataUrl, file.name, 'certificate');
-
-      if (extracted) {
-        const companyIdToUpdate = targetDoc?.companyId || activeCompany.id;
-        const fieldsUpdated = mergeExtractedCompanyProfile(
-          companyIdToUpdate,
-          extracted.companyData
-        );
-
-        setDocuments((prev) =>
-          prev.map((d) => {
-            if (d.id !== docId) return d;
-
-            const newIssue = extracted.issueDate || d.issueDate;
-            let newValidity =
-              extracted.validityDays && extracted.validityDays > 0
-                ? extracted.validityDays
-                : d.validityDays;
-            let newExp = extracted.expirationDate || d.expirationDate;
-
-            if (newIssue && !newExp && newValidity !== '' && Number(newValidity) > 0) {
-              newExp = addDaysToDateString(newIssue, Number(newValidity));
-            }
-            if (newIssue && newExp && (!newValidity || newValidity === '')) {
-              const p1 = new Date(newIssue).getTime();
-              const p2 = new Date(newExp).getTime();
-              const diff = Math.round((p2 - p1) / (1000 * 60 * 60 * 24));
-              if (diff > 0) newValidity = diff;
-            }
-
-            const controlNote = extracted.controlCode
-              ? `Código/Controle: ${extracted.controlCode}`
-              : '';
-            const summaryNote = extracted.summaryNotes || '';
-            const combinedNotes = [controlNote, summaryNote].filter(Boolean).join(' · ') || d.notes;
-
-            return {
-              ...d,
-              issueDate: newIssue,
-              validityDays: newValidity,
-              expirationDate: d.isPermanent ? '' : newExp,
-              notes: combinedNotes,
-              registrationCode: extracted.companyData?.cnpj || d.registrationCode,
-              updatedAt: new Date().toISOString(),
-            };
-          })
-        );
-
-        setLastExtractionSummary({
-          fileName: file.name,
-          documentTitle: extracted.documentTitle || targetDoc?.name || 'Documento',
-          companyName:
-            extracted.companyData?.companyName || activeCompany.companyName,
-          issueDate: extracted.issueDate || '—',
-          expirationDate: extracted.expirationDate || '—',
-          controlCode: extracted.controlCode || '—',
-          fieldsUpdatedInCompany: fieldsUpdated,
+      try {
+        const dataUrl = await readFileAsDataURL(file);
+        const extracted = await analyzeDocumentSmart(file, dataUrl, companies, {
+          useGeminiComplement: options?.useGeminiComplement,
+          mode: options?.mode || 'auto_match',
+          onProgress: (msg) =>
+            setReadingProgressText(`(${i + 1}/${fileArray.length}) ${file.name}: ${msg}`),
         });
 
-        showToast(
-          `PDF lido com sucesso! Emissão: ${formatDateBR(extracted.issueDate || '')} · Vencimento: ${formatDateBR(extracted.expirationDate || '')}`
-        );
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Erro ao ler o PDF.';
-      showToast(`Arquivo salvo (leitura automática indisponível: ${msg})`);
-    } finally {
-      setAnalyzingDocId(null);
-    }
-  };
-
-  /**
-   * 2. Leitor Inteligente de PDF Avulso (Botão no Topo da Lista):
-   * O usuário seleciona 1 ou mais PDFs (ex: várias certidões ou Cartão CNPJ)
-   * e o programa identifica sozinho qual é a certidão e qual é a empresa (pelo CNPJ),
-   * atualizando a linha certa e o banco de dados da empresa!
-   */
-  const handleSmartUploadAndMatch = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    setIsSmartReadingBatch(true);
-
-    try {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        showToast(`Lendo documento (${i + 1}/${files.length}): "${file.name}"...`);
-        const dataUrl = await readFileAsDataURL(file);
-        const extracted = await analyzeDocumentViaServer(dataUrl, file.name, 'auto_match');
-        if (!extracted) continue;
-
-        // 1. Descobrir de qual empresa é (pelo CNPJ extraído ou empresa ativa)
-        const extractedCnpjDigits = onlyDigits(extracted.companyData?.cnpj);
-        let matchedCompany = companies.find(
-          (c) => extractedCnpjDigits && onlyDigits(c.cnpj) === extractedCnpjDigits
-        );
-
+        // 1. Localizar empresa correspondente pelo CNPJ ou Razão Social
+        let matchedCompany: CompanyProfile | undefined;
+        if (options?.forceCompanyId) {
+          matchedCompany = companies.find((c) => c.id === options.forceCompanyId);
+        }
+        if (!matchedCompany && extracted.companyData.cnpj) {
+          const extDigits = onlyDigits(extracted.companyData.cnpj);
+          matchedCompany = companies.find((c) => onlyDigits(c.cnpj) === extDigits);
+        }
+        if (!matchedCompany && extracted.companyData.companyName) {
+          const normName = extracted.companyData.companyName.toLowerCase().slice(0, 14);
+          matchedCompany = companies.find((c) =>
+            c.companyName.toLowerCase().includes(normName)
+          );
+        }
         if (!matchedCompany) {
           matchedCompany = activeCompany;
         }
 
-        // Atualiza o Banco de Dados da empresa com todos os dados encontrados no PDF
-        const fieldsUpdated = mergeExtractedCompanyProfile(
-          matchedCompany.id,
-          extracted.companyData
-        );
-
-        // 2. Descobrir qual certidão daquela empresa corresponde ao PDF lido
+        // 2. Localizar documento correspondente dentro da empresa
         const companyDocs = documents.filter((d) => d.companyId === matchedCompany!.id);
-        let matchedDoc = companyDocs.find(
-          (d) =>
-            extracted.matchedTemplateKey && d.templateKey === extracted.matchedTemplateKey
+        let matchedDoc: CertidaoDocument | undefined;
+
+        if (options?.forceDocId) {
+          matchedDoc = documents.find((d) => d.id === options.forceDocId);
+          if (matchedDoc) {
+            matchedCompany =
+              companies.find((c) => c.id === matchedDoc!.companyId) || matchedCompany;
+          }
+        }
+        if (!matchedDoc && extracted.matchedTemplateKey) {
+          matchedDoc = companyDocs.find(
+            (d) => d.templateKey === extracted.matchedTemplateKey
+          );
+        }
+        if (!matchedDoc && extracted.documentTitle) {
+          const tLower = extracted.documentTitle.toLowerCase();
+          matchedDoc = companyDocs.find((d) =>
+            d.name.toLowerCase().includes(tLower.slice(0, 12))
+          );
+        }
+
+        // 3. Verificar duplicidade (no lote atual ou nos documentos já cadastrados)
+        const fp = computeDocumentFingerprint(
+          file.name,
+          file.size,
+          extracted.controlCode,
+          extracted.issueDate,
+          extracted.matchedTemplateKey || matchedDoc?.templateKey,
+          extracted.companyData.cnpj || matchedCompany.cnpj
         );
 
-        if (!matchedDoc && extracted.documentTitle) {
-          const titleLower = extracted.documentTitle.toLowerCase();
-          matchedDoc = companyDocs.find((d) =>
-            d.name.toLowerCase().includes(titleLower.slice(0, 12))
-          );
-        }
+        let isDuplicate = false;
+        let duplicateReason = '';
 
-        if (matchedDoc) {
-          await saveAttachmentData(matchedDoc.id, dataUrl);
-          const targetId = matchedDoc.id;
-
-          setDocuments((prev) =>
-            prev.map((d) => {
-              if (d.id !== targetId) return d;
-              const newIssue = extracted.issueDate || d.issueDate;
-              const newValidity =
-                extracted.validityDays && extracted.validityDays > 0
-                  ? extracted.validityDays
-                  : d.validityDays;
-              let newExp = extracted.expirationDate || d.expirationDate;
-              if (newIssue && !newExp && newValidity !== '' && Number(newValidity) > 0) {
-                newExp = addDaysToDateString(newIssue, Number(newValidity));
-              }
-              const controlNote = extracted.controlCode
-                ? `Código/Controle: ${extracted.controlCode}`
-                : '';
-              const summaryNote = extracted.summaryNotes || '';
-              return {
-                ...d,
-                fileType: 'local',
-                fileName: file.name,
-                fileMimeType: file.type || 'application/pdf',
-                fileSize: file.size,
-                issueDate: newIssue,
-                validityDays: newValidity,
-                expirationDate: d.isPermanent ? '' : newExp,
-                notes: [controlNote, summaryNote].filter(Boolean).join(' · ') || d.notes,
-                updatedAt: new Date().toISOString(),
-              };
-            })
-          );
-
-          setLastExtractionSummary({
-            fileName: file.name,
-            documentTitle: matchedDoc.name,
-            companyName: matchedCompany.companyName,
-            issueDate: extracted.issueDate || '—',
-            expirationDate: extracted.expirationDate || '—',
-            controlCode: extracted.controlCode || '—',
-            fieldsUpdatedInCompany: fieldsUpdated,
-          });
+        if (seenFingerprintsInBatch.has(fp)) {
+          isDuplicate = true;
+          duplicateReason = 'Este mesmo documento aparece mais de uma vez na seleção atual.';
         } else {
-          // Se for uma certidão extra não listada nas 23, cria automaticamente na empresa!
-          const newDocId = `doc-${Date.now()}-${i}`;
-          await saveAttachmentData(newDocId, dataUrl);
-          const newDoc: CertidaoDocument = {
-            id: newDocId,
-            companyId: matchedCompany.id,
-            name: extracted.documentTitle || file.name.replace(/\.[^.]+$/, ''),
-            category: extracted.category || 'Fiscais e Trabalhistas',
-            issuer: extracted.issuer || 'Órgão Identificado via PDF',
-            emitterUrl: '',
-            registrationCode: extracted.companyData?.cnpj || matchedCompany.cnpj,
-            primaryAutoFillField: 'cnpj_num',
-            issueDate: extracted.issueDate || getTodayDateString(),
-            validityDays: extracted.validityDays || 90,
-            expirationDate: extracted.expirationDate || '',
-            isPermanent: Boolean(extracted.isPermanent),
-            notes:
-              [
-                extracted.controlCode ? `Código: ${extracted.controlCode}` : '',
-                extracted.summaryNotes || '',
-              ]
-                .filter(Boolean)
-                .join(' · ') || 'Cadastrado automaticamente via leitura de PDF.',
-            fileType: 'local',
-            fileName: file.name,
-            fileMimeType: file.type || 'application/pdf',
-            fileSize: file.size,
-            updatedAt: new Date().toISOString(),
-          };
-          setDocuments((prev) => [newDoc, ...prev]);
+          seenFingerprintsInBatch.add(fp);
+          const existingSame = companyDocs.find(
+            (d) =>
+              (extracted.controlCode &&
+                d.controlCode &&
+                d.controlCode.toLowerCase() === extracted.controlCode.toLowerCase()) ||
+              (d.fileName === file.name &&
+                d.fileSize === file.size &&
+                d.issueDate === extracted.issueDate &&
+                Boolean(extracted.issueDate))
+          );
+          if (existingSame) {
+            isDuplicate = true;
+            duplicateReason = `Já existe cadastro com o mesmo arquivo/código em "${existingSame.name}" (Emissão: ${formatDateBR(existingSame.issueDate)}).`;
+          }
         }
+
+        // 4. Comparar dados cadastrais da empresa com o banco atual
+        const companyDiffs = buildCompanyFieldDiffs(matchedCompany, extracted.companyData);
+
+        const isUnidentified = !matchedDoc && !extracted.matchedTemplateKey;
+
+        newReviewItems.push({
+          tempId: `rev-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}`,
+          fileName: file.name,
+          fileSize: file.size,
+          fileMimeType: file.type || 'application/pdf',
+          dataUrl,
+          selectedToSave: !isDuplicate,
+          isDuplicate,
+          duplicateReason,
+          isUnidentified,
+          isUnreadable: extracted.isUnreadable,
+          warnings: extracted.warnings,
+          extractionEngine: extracted.extractionEngine,
+          matchedCompanyId: matchedCompany.id,
+          matchedDocId: matchedDoc ? matchedDoc.id : '',
+          documentTitle: matchedDoc ? matchedDoc.name : extracted.documentTitle,
+          matchedTemplateKey:
+            matchedDoc?.templateKey || extracted.matchedTemplateKey || '',
+          category: matchedDoc ? matchedDoc.category : extracted.category,
+          issuer: matchedDoc ? matchedDoc.issuer : extracted.issuer,
+          issueDate: extracted.issueDate || matchedDoc?.issueDate || '',
+          validityDays:
+            extracted.validityDays > 0
+              ? extracted.validityDays
+              : matchedDoc?.validityDays || 90,
+          expirationDate:
+            extracted.expirationDate || matchedDoc?.expirationDate || '',
+          isPermanent: matchedDoc ? matchedDoc.isPermanent : extracted.isPermanent,
+          certificateNumber: extracted.certificateNumber || '',
+          controlCode: extracted.controlCode || '',
+          documentSituation: extracted.documentSituation || 'Regular / Vigente',
+          notes: extracted.summaryNotes || matchedDoc?.notes || '',
+          extractedCnpj: extracted.companyData.cnpj || '',
+          cnpjValid: extracted.cnpjValid,
+          companyDiffs,
+        });
+      } catch (fileErr: unknown) {
+        // A falha de leitura de um arquivo não interrompe os demais!
+        const errMsg =
+          fileErr instanceof Error
+            ? fileErr.message
+            : 'Erro ao ler a estrutura do arquivo.';
+        let fallbackDataUrl = '';
+        try {
+          fallbackDataUrl = await readFileAsDataURL(file);
+        } catch {
+          // ignore
+        }
+
+        newReviewItems.push({
+          tempId: `rev-err-${Date.now()}-${i}`,
+          fileName: file.name,
+          fileSize: file.size,
+          fileMimeType: file.type || 'application/pdf',
+          dataUrl: fallbackDataUrl,
+          selectedToSave: false,
+          isDuplicate: false,
+          isUnidentified: true,
+          isUnreadable: true,
+          warnings: [
+            `Não foi possível ler automaticamente este arquivo (${errMsg}). Você pode preencher manualmente abaixo se desejar salvar.`,
+          ],
+          extractionEngine: 'pdfjs-local',
+          matchedCompanyId: options?.forceCompanyId || activeCompany.id,
+          matchedDocId: options?.forceDocId || '',
+          documentTitle: file.name.replace(/\.[^.]+$/, ''),
+          matchedTemplateKey: '',
+          category: 'Fiscais e Trabalhistas',
+          issuer: '',
+          issueDate: '',
+          validityDays: 90,
+          expirationDate: '',
+          isPermanent: false,
+          certificateNumber: '',
+          controlCode: '',
+          documentSituation: '',
+          notes: '',
+          extractedCnpj: '',
+          cnpjValid: null,
+          companyDiffs: [],
+        });
       }
-      showToast('Leitura inteligente de PDF concluída com sucesso!');
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Falha na leitura do PDF.';
-      showToast(`Erro ao ler PDF: ${msg}`);
+    }
+
+    setPendingReviewItems((prev) => [...prev, ...newReviewItems]);
+    setIsSmartReadingBatch(false);
+    setAnalyzingDocId(null);
+    setReadingProgressText('');
+  };
+
+  const handleAttachFileToDoc = async (docId: string, file: File) => {
+    const targetDoc = documents.find((d) => d.id === docId);
+    await processFilesForReviewQueue([file], {
+      forceDocId: docId,
+      forceCompanyId: targetDoc?.companyId || activeCompany.id,
+      mode: 'certificate',
+    });
+  };
+
+  const handleSmartUploadAndMatch = async (
+    files: FileList | File[] | null,
+    useGeminiComplement = false
+  ) => {
+    if (!files || files.length === 0) return;
+    await processFilesForReviewQueue(files, {
+      useGeminiComplement,
+      mode: 'auto_match',
+    });
+  };
+
+  const handlePopulateCompanyFromPdf = async (file: File) => {
+    await processFilesForReviewQueue([file], {
+      forceCompanyId: activeCompany.id,
+      mode: 'company_profile',
+    });
+  };
+
+  /**
+   * Permite refinar um item específico da tela de conferência usando a IA complementar (Gemini)
+   */
+  const handleRunGeminiEnrichItem = async (tempId: string) => {
+    const target = pendingReviewItems.find((i) => i.tempId === tempId);
+    if (!target || !target.dataUrl) return;
+
+    setIsSmartReadingBatch(true);
+    setReadingProgressText(`Refinando "${target.fileName}" com IA...`);
+    try {
+      const res = await fetch('/api/analyze-document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dataUrl: target.dataUrl,
+          fileName: target.fileName,
+          mode: 'auto_match',
+        }),
+      });
+      const json = await res.json();
+      if (!json.available || !json.data) {
+        showToast('Leitura local ativa (IA complementar não configurada ou sem dados adicionais).');
+        return;
+      }
+      const ai = json.data;
+      const comp =
+        companies.find((c) => c.id === target.matchedCompanyId) || activeCompany;
+      const diffs = buildCompanyFieldDiffs(comp, ai.companyData);
+
+      setPendingReviewItems((prev) =>
+        prev.map((item) => {
+          if (item.tempId !== tempId) return item;
+          return {
+            ...item,
+            extractionEngine: 'hybrid-gemini',
+            documentTitle: ai.documentTitle || item.documentTitle,
+            issuer: ai.issuer || item.issuer,
+            issueDate: ai.issueDate || item.issueDate,
+            validityDays: ai.validityDays || item.validityDays,
+            expirationDate: ai.expirationDate || item.expirationDate,
+            certificateNumber: ai.certificateNumber || item.certificateNumber,
+            controlCode: ai.controlCode || item.controlCode,
+            documentSituation: ai.documentSituation || item.documentSituation,
+            notes: ai.summaryNotes || item.notes,
+            companyDiffs: diffs.length > 0 ? diffs : item.companyDiffs,
+          };
+        })
+      );
+      showToast('Dados refinados com IA complementar!');
+    } catch {
+      showToast('Mantendo dados extraídos localmente.');
     } finally {
       setIsSmartReadingBatch(false);
+      setReadingProgressText('');
     }
   };
 
   /**
-   * 3. Preencher toda a Ficha da Empresa lendo um PDF (Cartão CNPJ, Contrato Social, JUCEPI, etc.)
+   * Confirma e salva todos os itens marcados na janela "CONFERIR DADOS":
+   * 1. Arquiva a versão anterior e seu PDF no Histórico de Documentos.
+   * 2. Salva o novo PDF no IndexedDB.
+   * 3. Atualiza as datas, código de autenticidade e situação da certidão.
+   * 4. Atualiza no Banco de Empresas APENAS os campos que o usuário marcou!
    */
-  const handlePopulateCompanyFromPdf = async (file: File) => {
-    setIsSmartReadingBatch(true);
-    try {
-      showToast(`Extraindo dados da empresa de "${file.name}"...`);
-      const dataUrl = await readFileAsDataURL(file);
-      const extracted = await analyzeDocumentViaServer(dataUrl, file.name, 'company_profile');
+  const handleConfirmPendingReviews = async () => {
+    const selectedItems = pendingReviewItems.filter((i) => i.selectedToSave);
+    if (selectedItems.length === 0) {
+      setPendingReviewItems([]);
+      return;
+    }
 
-      if (!extracted?.companyData) {
-        showToast('Não foi possível identificar dados cadastrais neste arquivo.');
-        return;
+    const updatedFieldsSummary: string[] = [];
+
+    for (const item of selectedItems) {
+      // 1. Aplicar apenas as alterações cadastrais da empresa confirmadas pelo usuário
+      const confirmedDiffs = item.companyDiffs.filter((d) => d.selected);
+      if (confirmedDiffs.length > 0) {
+        setCompanies((prev) =>
+          prev.map((c) => {
+            if (c.id !== item.matchedCompanyId) return c;
+            const updatedComp = { ...c };
+            for (const diff of confirmedDiffs) {
+              updatedComp[diff.field] = diff.proposedValue;
+              if (!updatedFieldsSummary.includes(diff.label)) {
+                updatedFieldsSummary.push(diff.label);
+              }
+            }
+            return updatedComp;
+          })
+        );
       }
 
-      const cd = extracted.companyData;
-      setCompanies((prev) =>
-        prev.map((c) => {
-          if (c.id !== activeCompany.id) return c;
-          return {
-            ...c,
-            companyName: cd.companyName || c.companyName,
-            tradeName: cd.tradeName || c.tradeName,
-            cnpj: cd.cnpj || c.cnpj,
-            stateRegistration: cd.stateRegistration || c.stateRegistration,
-            municipalRegistration: cd.municipalRegistration || c.municipalRegistration,
-            nire: cd.nire || c.nire,
-            cnaeMain: cd.cnaeMain || c.cnaeMain,
-            cityState: cd.cityState || c.cityState,
-            cep: cd.cep || c.cep,
-            address: cd.address || c.address,
-            email: cd.email || c.email,
-            phone: cd.phone || c.phone,
-            partnerName: cd.partnerName || c.partnerName,
-            partnerCpf: cd.partnerCpf || c.partnerCpf,
-            partnerRg: cd.partnerRg || c.partnerRg,
-            partnerBirthDate: cd.partnerBirthDate || c.partnerBirthDate,
-            techResponsibleName: cd.techResponsibleName || c.techResponsibleName,
-            techResponsibleCouncil: cd.techResponsibleCouncil || c.techResponsibleCouncil,
-            techResponsibleCpf: cd.techResponsibleCpf || c.techResponsibleCpf,
-          };
-        })
-      );
+      // 2. Atualizar documento existente ou criar novo documento na empresa
+      if (item.matchedDocId) {
+        const existingDoc = documents.find((d) => d.id === item.matchedDocId);
+        if (existingDoc) {
+          await archiveDocumentVersionToHistory(
+            existingDoc,
+            'Substituição confirmada via Leitura Inteligente de PDF'
+          );
+        }
 
-      showToast(
-        `Ficha da empresa "${cd.companyName || activeCompany.companyName}" preenchida automaticamente pelo PDF!`
-      );
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Erro ao processar PDF.';
-      showToast(`Erro: ${msg}`);
-    } finally {
-      setIsSmartReadingBatch(false);
+        if (item.dataUrl) {
+          await saveAttachmentData(item.matchedDocId, item.dataUrl);
+        }
+
+        const noteParts = [
+          item.documentSituation ? `Situação: ${item.documentSituation}` : '',
+          item.certificateNumber ? `Nº: ${item.certificateNumber}` : '',
+          item.controlCode ? `Autenticidade: ${item.controlCode}` : '',
+          item.notes || '',
+        ].filter(Boolean);
+
+        setDocuments((prev) =>
+          prev.map((d) => {
+            if (d.id !== item.matchedDocId) return d;
+            return {
+              ...d,
+              name: item.documentTitle || d.name,
+              category: item.category || d.category,
+              issuer: item.issuer || d.issuer,
+              issueDate: item.issueDate,
+              validityDays: item.isPermanent ? '' : item.validityDays,
+              expirationDate: item.isPermanent ? '' : item.expirationDate,
+              isPermanent: item.isPermanent,
+              certificateNumber: item.certificateNumber || d.certificateNumber,
+              controlCode: item.controlCode || d.controlCode,
+              documentSituation: item.documentSituation || d.documentSituation,
+              awaitingReview: false,
+              notes: noteParts.join(' · ') || d.notes,
+              fileType: item.dataUrl ? 'local' : d.fileType,
+              fileName: item.fileName || d.fileName,
+              fileMimeType: item.fileMimeType || d.fileMimeType,
+              fileSize: item.fileSize || d.fileSize,
+              updatedAt: new Date().toISOString(),
+            };
+          })
+        );
+      } else {
+        const newDocId = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        if (item.dataUrl) {
+          await saveAttachmentData(newDocId, item.dataUrl);
+        }
+        const comp =
+          companies.find((c) => c.id === item.matchedCompanyId) || activeCompany;
+
+        const newDoc: CertidaoDocument = {
+          id: newDocId,
+          companyId: item.matchedCompanyId,
+          templateKey: item.matchedTemplateKey || undefined,
+          name: item.documentTitle || item.fileName.replace(/\.[^.]+$/, ''),
+          category: item.category || 'Fiscais e Trabalhistas',
+          issuer: item.issuer || 'Órgão Emissor',
+          emitterUrl: '',
+          registrationCode: item.extractedCnpj || comp.cnpj,
+          primaryAutoFillField: 'cnpj_num',
+          issueDate: item.issueDate,
+          validityDays: item.isPermanent ? '' : item.validityDays,
+          expirationDate: item.isPermanent ? '' : item.expirationDate,
+          isPermanent: item.isPermanent,
+          certificateNumber: item.certificateNumber,
+          controlCode: item.controlCode,
+          documentSituation: item.documentSituation,
+          awaitingReview: false,
+          notes:
+            [
+              item.documentSituation ? `Situação: ${item.documentSituation}` : '',
+              item.controlCode ? `Autenticidade: ${item.controlCode}` : '',
+              item.notes,
+            ]
+              .filter(Boolean)
+              .join(' · ') || 'Importado via Leitura Inteligente de PDF.',
+          fileType: item.dataUrl ? 'local' : 'none',
+          fileName: item.fileName,
+          fileMimeType: item.fileMimeType,
+          fileSize: item.fileSize,
+          updatedAt: new Date().toISOString(),
+        };
+
+        setDocuments((prev) => [newDoc, ...prev]);
+      }
     }
+
+    const last = selectedItems[selectedItems.length - 1];
+    const lastComp =
+      companies.find((c) => c.id === last.matchedCompanyId) || activeCompany;
+
+    setLastExtractionSummary({
+      fileName:
+        selectedItems.length === 1
+          ? last.fileName
+          : `${selectedItems.length} arquivos importados`,
+      documentTitle:
+        selectedItems.length === 1
+          ? last.documentTitle
+          : `${selectedItems.length} Certidões Conferidas e Atualizadas`,
+      companyName: lastComp.companyName,
+      issueDate: last.issueDate || '—',
+      expirationDate: last.expirationDate || '—',
+      controlCode: last.controlCode || '—',
+      fieldsUpdatedInCompany: updatedFieldsSummary,
+    });
+
+    setPendingReviewItems([]);
+    showToast(
+      `✓ ${selectedItems.length} ${
+        selectedItems.length === 1 ? 'documento conferido e salvo' : 'documentos conferidos e salvos'
+      } com sucesso! Versões anteriores preservadas no Histórico.`
+    );
   };
 
   // ============================================================================
-  // OTHER HANDLERS
+  // OTHER HANDLERS (EMISSION, INLINE EDIT, RENEW, HISTORY, BACKUP)
   // ============================================================================
 
   const handleCopyText = async (id: string, text: string, label: string) => {
@@ -1866,7 +1730,10 @@ export default function App() {
       // ignore
     }
 
-    const targetUrl = buildAutoFillTargetUrl(doc.emitterUrl, comp);
+    // Dispara ponte segura local para o Tampermonkey (sem enviar dados sensíveis na URL!)
+    dispatchAutofillBridgeEvent(comp, doc.templateKey);
+
+    const targetUrl = buildCleanTargetUrl(doc.emitterUrl);
 
     setActiveEmissionSession({
       doc,
@@ -1877,7 +1744,7 @@ export default function App() {
     });
 
     showToast(
-      `⚡ ${chosenField.label} (${valueToCopy}) já copiado! No site, basta Ctrl+V (ou usar o AutoPreencher) e digitar o Captcha.`
+      `⚡ Emissão Assistida iniciada! ${chosenField.label} (${valueToCopy}) copiado para o Ctrl+V.`
     );
   };
 
@@ -1979,40 +1846,58 @@ export default function App() {
       newIssueDate: today,
       newValidityDays: defaultValidity,
       newExpirationDate: nextExp,
+      newControlCode: '',
+      newCertificateNumber: '',
+      newDocumentSituation: 'Certidão Negativa / Regular',
       newDriveUrl: doc.driveUrl || '',
       newFile: null,
     });
   };
 
-  // When a user selects a PDF inside the Quick Renew modal, read its dates automatically too!
+  // Quando o usuário seleciona um PDF dentro do modal Renovar, usa o motor gratuito PDF.js + OCR!
   const handleRenewModalFileSelect = async (file: File | null) => {
     if (!renewingDoc || !file) return;
-    setRenewingDoc((prev) => (prev ? { ...prev, newFile: file, extractedInfo: 'Lendo datas do PDF...' } : null));
+    setRenewingDoc((prev) =>
+      prev
+        ? {
+            ...prev,
+            newFile: file,
+            extractedInfo: 'Lendo datas e autenticidade do PDF localmente (PDF.js / OCR)...',
+          }
+        : null
+    );
     try {
       const dataUrl = await readFileAsDataURL(file);
-      const extracted = await analyzeDocumentViaServer(dataUrl, file.name, 'certificate');
-      if (extracted) {
-        setRenewingDoc((prev) => {
-          if (!prev) return null;
-          const issue = extracted.issueDate || prev.newIssueDate;
-          const valDays =
-            extracted.validityDays && extracted.validityDays > 0
-              ? extracted.validityDays
-              : prev.newValidityDays;
-          const exp =
-            extracted.expirationDate || addDaysToDateString(issue, valDays);
-          return {
-            ...prev,
-            newIssueDate: issue,
-            newValidityDays: valDays,
-            newExpirationDate: exp,
-            extractedInfo: `Datas extraídas do PDF! Emissão: ${formatDateBR(issue)} · Vencimento: ${formatDateBR(exp)}${extracted.controlCode ? ` · Código: ${extracted.controlCode}` : ''}`,
-          };
-        });
-      }
+      const extracted = await analyzeDocumentSmart(file, dataUrl, companies, {
+        mode: 'certificate',
+      });
+      setRenewingDoc((prev) => {
+        if (!prev) return null;
+        const issue = extracted.issueDate || prev.newIssueDate;
+        const valDays =
+          extracted.validityDays && extracted.validityDays > 0
+            ? extracted.validityDays
+            : prev.newValidityDays;
+        const exp =
+          extracted.expirationDate || addDaysToDateString(issue, valDays);
+        return {
+          ...prev,
+          newIssueDate: issue,
+          newValidityDays: valDays,
+          newExpirationDate: exp,
+          newControlCode: extracted.controlCode || prev.newControlCode,
+          newCertificateNumber:
+            extracted.certificateNumber || prev.newCertificateNumber,
+          newDocumentSituation:
+            extracted.documentSituation || prev.newDocumentSituation,
+          extractedInfo: `✓ Dados extraídos (${extracted.extractionEngine === 'pdfjs-local' ? 'PDF.js Local' : 'OCR/Híbrido'}): Emissão ${formatDateBR(issue)} · Vencimento ${formatDateBR(exp)}${extracted.controlCode ? ` · Autenticidade: ${extracted.controlCode}` : ''}`,
+        };
+      });
     } catch {
       setRenewingDoc((prev) =>
-        prev ? { ...prev, extractedInfo: 'Arquivo anexado (confira as datas acima).' } : null
+        prev
+          ? { ...prev, extractedInfo: 'Arquivo anexado (confira as datas antes de confirmar).' }
+          : null
       );
     }
   };
@@ -2020,8 +1905,20 @@ export default function App() {
   const confirmQuickRenew = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!renewingDoc) return;
-    const { doc, newIssueDate, newValidityDays, newExpirationDate, newDriveUrl, newFile } =
-      renewingDoc;
+    const {
+      doc,
+      newIssueDate,
+      newValidityDays,
+      newExpirationDate,
+      newControlCode,
+      newCertificateNumber,
+      newDocumentSituation,
+      newDriveUrl,
+      newFile,
+    } = renewingDoc;
+
+    // Preserva a versão anterior e seu PDF no Histórico!
+    await archiveDocumentVersionToHistory(doc, 'Renovação de Certidão');
 
     let fileType = doc.fileType;
     let fileName = doc.fileName;
@@ -2040,15 +1937,26 @@ export default function App() {
       fileType = 'drive';
     }
 
+    const noteParts = [
+      newDocumentSituation ? `Situação: ${newDocumentSituation}` : '',
+      newCertificateNumber ? `Nº: ${newCertificateNumber}` : '',
+      newControlCode ? `Autenticidade: ${newControlCode}` : '',
+    ].filter(Boolean);
+
     setDocuments((prev) =>
       prev.map((item) =>
         item.id === doc.id
           ? {
-              ...item,
+               ...item,
               isPermanent: false,
               issueDate: newIssueDate,
               validityDays: newValidityDays,
               expirationDate: newExpirationDate,
+              controlCode: newControlCode || item.controlCode,
+              certificateNumber: newCertificateNumber || item.certificateNumber,
+              documentSituation: newDocumentSituation || item.documentSituation,
+              awaitingReview: false,
+              notes: noteParts.length > 0 ? noteParts.join(' · ') : item.notes,
               fileType,
               fileName,
               fileMimeType,
@@ -2061,7 +1969,102 @@ export default function App() {
     );
     setRenewingDoc(null);
     setActiveEmissionSession(null);
-    showToast(`Certidão "${doc.name}" renovada até ${formatDateBR(newExpirationDate)}!`);
+    showToast(
+      `Certidão "${doc.name}" renovada até ${formatDateBR(newExpirationDate)}! Versão anterior salva no Histórico.`
+    );
+  };
+
+  // ============================================================================
+  // HISTORY HANDLERS (VIEW, DOWNLOAD, RESTORE PREVIOUS VERSIONS)
+  // ============================================================================
+
+  const handleViewHistoryAttachment = async (entry: DocumentHistoryEntry) => {
+    if (entry.attachmentHistoryKey) {
+      const dataUrl = await getAttachmentData(entry.attachmentHistoryKey);
+      setPreviewModal({
+        doc: {
+          name: `${entry.documentName} (Versão de ${formatDateBR(entry.issueDate)})`,
+          fileName: entry.fileName,
+          fileMimeType: entry.fileMimeType,
+        },
+        dataUrl,
+      });
+    } else if (entry.driveUrl) {
+      setPreviewModal({
+        doc: {
+          name: entry.documentName,
+          driveUrl: entry.driveUrl,
+        },
+        dataUrl: null,
+      });
+    }
+  };
+
+  const handleDownloadHistoryAttachment = async (entry: DocumentHistoryEntry) => {
+    if (!entry.attachmentHistoryKey) return;
+    const dataUrl = await getAttachmentData(entry.attachmentHistoryKey);
+    if (!dataUrl) {
+      showToast('Arquivo PDF anterior não encontrado no armazenamento local.');
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = entry.fileName || `${entry.documentName}-historico.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const handleRestoreHistoryVersion = async (entry: DocumentHistoryEntry) => {
+    const currentDoc = documents.find((d) => d.id === entry.documentId);
+    if (currentDoc) {
+      await archiveDocumentVersionToHistory(
+        currentDoc,
+        'Arquivado antes de restaurar versão anterior'
+      );
+    }
+
+    if (entry.attachmentHistoryKey) {
+      const prevDataUrl = await getAttachmentData(entry.attachmentHistoryKey);
+      if (prevDataUrl) {
+        await saveAttachmentData(entry.documentId, prevDataUrl);
+      }
+    }
+
+    setDocuments((prev) =>
+      prev.map((d) => {
+        if (d.id !== entry.documentId) return d;
+        return {
+          ...d,
+          issueDate: entry.issueDate,
+          validityDays: entry.validityDays,
+          expirationDate: entry.expirationDate,
+          certificateNumber: entry.certificateNumber,
+          controlCode: entry.controlCode,
+          documentSituation: entry.documentSituation,
+          fileType: entry.attachmentHistoryKey
+            ? 'local'
+            : entry.driveUrl
+            ? 'drive'
+            : d.fileType,
+          fileName: entry.fileName || d.fileName,
+          fileMimeType: entry.fileMimeType || d.fileMimeType,
+          fileSize: entry.fileSize || d.fileSize,
+          updatedAt: new Date().toISOString(),
+        };
+      })
+    );
+
+    showToast(`Versão de ${formatDateBR(entry.issueDate)} restaurada com sucesso!`);
+  };
+
+  const handleDeleteHistoryEntry = async (historyId: string) => {
+    const target = documentHistory.find((h) => h.id === historyId);
+    if (target?.attachmentHistoryKey) {
+      await deleteAttachmentData(target.attachmentHistoryKey);
+    }
+    setDocumentHistory((prev) => prev.filter((h) => h.id !== historyId));
+    showToast('Registro removido do histórico.');
   };
 
   const openCreateModal = () => {
@@ -2106,8 +2109,14 @@ export default function App() {
     openEditModal(doc);
   };
 
-  const handleDownloadAttachment = async (doc: CertidaoDocument) => {
-    if (doc.fileType === 'local') {
+  const handleDownloadAttachment = async (doc: {
+    id?: string;
+    name: string;
+    fileType?: 'none' | 'local' | 'drive';
+    fileName?: string;
+    driveUrl?: string;
+  }) => {
+    if (doc.id) {
       const dataUrl = await getAttachmentData(doc.id);
       if (!dataUrl) {
         showToast('Arquivo não encontrado no armazenamento local.');
@@ -2120,8 +2129,6 @@ export default function App() {
       a.click();
       document.body.removeChild(a);
       showToast(`Download iniciado: ${doc.fileName || doc.name}`);
-    } else if (doc.fileType === 'drive' && doc.driveUrl) {
-      setPreviewModal({ doc, dataUrl: null });
     }
   };
 
@@ -2138,6 +2145,10 @@ export default function App() {
     if (!companyModal) return;
     const { isNew, profile, cloneStandardDocs } = companyModal;
     if (!profile.companyName.trim()) return;
+
+    if (onlyDigits(profile.cnpj).length === 14 && !isValidCNPJ(profile.cnpj)) {
+      showToast('Atenção: O CNPJ informado possui dígitos verificadores inválidos.');
+    }
 
     if (isNew) {
       setCompanies((prev) => [...prev, profile]);
@@ -2191,10 +2202,12 @@ export default function App() {
     const attachments = await getAllAttachmentsMap();
     const payload = {
       app: 'Mago das Licitações - Multi-Empresas Piauí',
+      version: '3.0',
       exportedAt: new Date().toISOString(),
       warningThresholdDays,
       companies,
       documents,
+      documentHistory,
       attachments,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -2206,7 +2219,7 @@ export default function App() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    showToast('Backup completo JSON exportado com sucesso!');
+    showToast('Backup completo JSON (empresas, certidões, histórico e PDFs) exportado!');
   };
 
   const handleExportCSV = () => {
@@ -2221,6 +2234,7 @@ export default function App() {
       'Data de Emissão',
       'Prazo (Dias)',
       'Data de Vencimento',
+      'Código de Autenticidade',
       'Dado Principal AutoPreenchimento',
       'Link do Site Emissor',
       'Arquivo Anexo / Nuvem',
@@ -2242,6 +2256,7 @@ export default function App() {
         : doc.expirationDate
         ? formatDateBR(doc.expirationDate)
         : '',
+      doc.controlCode || '',
       doc.primaryAutoFillField || 'cnpj_num',
       doc.emitterUrl,
       doc.fileType === 'local'
@@ -2286,6 +2301,9 @@ export default function App() {
         setWarningThresholdDays(Number(parsed.warningThresholdDays) || 30);
       }
       setDocuments(parsed.documents);
+      if (Array.isArray(parsed.documentHistory)) {
+        setDocumentHistory(parsed.documentHistory);
+      }
       if (parsed.attachments && typeof parsed.attachments === 'object') {
         for (const [docId, dataUrl] of Object.entries(parsed.attachments)) {
           if (typeof dataUrl === 'string') {
@@ -2320,9 +2338,9 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 transition-colors duration-150">
       {/* ====================================================================
-          TOP BAR CONTRACT: 3 Zones separated by gap-8
+          TOP BAR CONTRACT: 3 Zones separated by gap-6
       ==================================================================== */}
-      <header className="sticky top-0 z-30 flex items-center justify-between gap-8 px-6 py-3 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200 dark:border-slate-800">
+      <header className="sticky top-0 z-30 flex items-center justify-between gap-4 px-6 py-3 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200 dark:border-slate-800">
         <a
           href="#lista"
           onClick={(e) => {
@@ -2334,11 +2352,11 @@ export default function App() {
           Mago das Licitações
         </a>
 
-        <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-400">
+        <nav className="hidden xl:flex items-center gap-4 text-xs font-semibold text-slate-600 dark:text-slate-400">
           <button
             type="button"
             onClick={() => setActiveSection('dashboard')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
+            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
               activeSection === 'dashboard'
                 ? 'border-blue-600 text-slate-900 dark:text-white dark:border-blue-400'
                 : 'border-transparent hover:text-slate-900 dark:hover:text-white'
@@ -2348,30 +2366,74 @@ export default function App() {
           </button>
           <button
             type="button"
+            onClick={() => setActiveSection('batch_import')}
+            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer flex items-center gap-1 ${
+              activeSection === 'batch_import'
+                ? 'border-emerald-600 text-emerald-700 dark:text-emerald-300 dark:border-emerald-400'
+                : 'border-transparent hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <FileScan className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            Importar Vários PDFs
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSection('pendencias')}
+            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer flex items-center gap-1 ${
+              activeSection === 'pendencias'
+                ? 'border-amber-600 text-amber-700 dark:text-amber-300 dark:border-amber-400'
+                : 'border-transparent hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <ListChecks className="w-3.5 h-3.5 text-amber-500" />
+            Central de Pendências (
+            {summaryCounts.vencido +
+              summaryCounts.atencao +
+              summaryCounts.sem_data +
+              summaryCounts.aguardando_conferencia}
+            )
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setHistoryFilterDocId(null);
+              setActiveSection('history');
+            }}
+            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer flex items-center gap-1 ${
+              activeSection === 'history'
+                ? 'border-blue-600 text-slate-900 dark:text-white dark:border-blue-400'
+                : 'border-transparent hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <History className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+            Histórico ({documentHistory.length})
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveSection('company_db')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
+            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
               activeSection === 'company_db'
                 ? 'border-blue-600 text-slate-900 dark:text-white dark:border-blue-400'
                 : 'border-transparent hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            Banco de Dados das Empresas ({companies.length})
+            Banco de Empresas ({companies.length})
           </button>
           <button
             type="button"
             onClick={() => setActiveSection('links')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
+            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
               activeSection === 'links'
                 ? 'border-blue-600 text-slate-900 dark:text-white dark:border-blue-400'
                 : 'border-transparent hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            Links & AutoPreenchimento
+            Links & Adaptadores
           </button>
           <button
             type="button"
             onClick={() => setActiveSection('backup')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
+            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
               activeSection === 'backup'
                 ? 'border-blue-600 text-slate-900 dark:text-white dark:border-blue-400'
                 : 'border-transparent hover:text-slate-900 dark:hover:text-white'
@@ -2381,11 +2443,11 @@ export default function App() {
           </button>
         </nav>
 
-        <div className="flex items-center shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={openCreateModal}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             Nova Certidão
@@ -2436,7 +2498,7 @@ export default function App() {
                 disabled={isSmartReadingBatch}
                 onClick={() => smartPdfInputRef.current?.click()}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-60"
-                title="Envie 1 ou mais PDFs de certidões ou Cartão CNPJ: o programa lê as datas, identifica a certidão e preenche os dados da empresa sozinho!"
+                title="Selecione 1 ou vários PDFs: leitura gratuita com PDF.js + OCR Tesseract.js + tela CONFERIR DADOS antes de salvar!"
               >
                 {isSmartReadingBatch ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -2444,8 +2506,29 @@ export default function App() {
                   <FileScan className="w-3.5 h-3.5" />
                 )}
                 {isSmartReadingBatch
-                  ? 'Lendo PDF...'
-                  : 'Ler PDF (Extrair Datas e Dados Automaticamente)'}
+                  ? readingProgressText || 'Lendo PDFs...'
+                  : 'IMPORTAR VÁRIOS PDFs'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveSection('pendencias')}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/70 border border-amber-200 dark:border-amber-800 rounded-lg hover:bg-amber-100 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <ListChecks className="w-3.5 h-3.5" />
+                Pendências
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setHistoryFilterDocId(null);
+                  setActiveSection('history');
+                }}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <History className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                Histórico ({documentHistory.length})
               </button>
 
               <button
@@ -2458,7 +2541,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* Right: Automation Script + Alert Threshold + Theme Toggle */}
+            {/* Right: Automation Script + Alert Threshold (60, 30, 15, 7, 1 dias) + Theme Toggle */}
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
@@ -2466,20 +2549,20 @@ export default function App() {
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-800 dark:text-amber-300 bg-amber-100/80 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 rounded-lg hover:bg-amber-200/70 cursor-pointer whitespace-nowrap shrink-0"
               >
                 <Zap className="w-3.5 h-3.5" />
-                AutoPreenchimento nos Sites
+                AutoPreenchimento Seguro
               </button>
 
               <div className="hidden sm:flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400">
                 <SlidersHorizontal className="w-3.5 h-3.5" />
-                <span>Alerta:</span>
+                <span>Alerta Vencimento:</span>
                 <div className="flex items-center bg-slate-200/80 dark:bg-slate-800 p-0.5 rounded-md">
-                  {[15, 30, 45].map((days) => (
+                  {[60, 30, 15, 7, 1].map((days) => (
                     <button
                       key={days}
                       type="button"
                       onClick={() => {
                         setWarningThresholdDays(days);
-                        showToast(`Alerta amarelo ajustado para ${days} dias.`);
+                        showToast(`Alerta de proximidade do vencimento ajustado para ${days} dia(s).`);
                       }}
                       className={`px-2 py-0.5 text-xs font-mono tabular-nums rounded cursor-pointer ${
                         warningThresholdDays === days
@@ -2608,14 +2691,14 @@ export default function App() {
       </div>
 
       {/* ====================================================================
-          BANNER DE CONFIRMAÇÃO DE LEITURA AUTOMÁTICA DO PDF (Quando um PDF é lido)
+          BANNER DE CONFIRMAÇÃO DE LEITURA AUTOMÁTICA DO PDF (Quando um PDF é salvo)
       ==================================================================== */}
       {lastExtractionSummary && (
         <div className="bg-emerald-950 text-white border-b border-emerald-800">
           <div className="max-w-[1440px] mx-auto px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
             <div className="flex flex-wrap items-center gap-2">
               <FileScan className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span className="font-bold text-emerald-300">PDF Lido Automaticamente:</span>
+              <span className="font-bold text-emerald-300">PDF Conferido e Salvo:</span>
               <span className="font-semibold">{lastExtractionSummary.documentTitle}</span>
               <span className="text-emerald-400">·</span>
               <span>Empresa: {lastExtractionSummary.companyName}</span>
@@ -2649,110 +2732,40 @@ export default function App() {
       )}
 
       {/* ====================================================================
-          PAINEL ASSISTENTE DE EMISSÃO ATIVA (Aparece ao clicar em "⚡ Emitir")
+          PAINEL ASSISTENTE DE EMISSÃO ATIVA (Aparece ao clicar em "EMITIR CERTIDÃO")
       ==================================================================== */}
       {activeEmissionSession && (
-        <div className="bg-blue-950 text-white border-b border-blue-800 shadow-lg">
-          <div className="max-w-[1440px] mx-auto px-6 py-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            <div className="space-y-1">
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="font-semibold text-amber-300 flex items-center gap-1">
-                  <Zap className="w-3.5 h-3.5" />
-                  Modo Emissão Assistida Ativo:
-                </span>
-                <span className="font-bold text-white">{activeEmissionSession.doc.name}</span>
-                <span className="text-blue-300">·</span>
-                <span className="text-blue-200">
-                  Empresa: <strong>{activeEmissionSession.company.companyName}</strong>
-                </span>
-              </div>
-              <div className="text-xs text-blue-200">
-                <span className="text-emerald-300 font-semibold">
-                  ✓ {activeEmissionSession.copiedFieldLabel} (
-                  <span className="font-mono">{activeEmissionSession.copiedValue}</span>) já está no
-                  seu Ctrl+V!
-                </span>{' '}
-                · Assim que baixar o PDF do site, basta anexar ao lado que o sistema lê a validade sozinho!
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-1.5">
-              {(
-                [
-                  ['cnpj_num', 'CNPJ (Limpo)'],
-                  ['ie_num', 'IE (SEFAZ-PI)'],
-                  ['im_num', 'IM (Prefeitura)'],
-                  ['cpf_num', 'CPF Sócio'],
-                  ['email', 'E-mail'],
-                ] as [AutoFillFieldKey, string][]
-              ).map(([key, shortLabel]) => {
-                const map = resolveCompanyFieldMap(activeEmissionSession.company);
-                const val = map[key].value;
-                if (!val) return null;
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => handleCopyText(`assist-${key}`, val, map[key].label)}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-mono bg-blue-900/90 hover:bg-blue-800 border border-blue-700 rounded-lg text-white cursor-pointer"
-                  >
-                    {copiedId === `assist-${key}` ? (
-                      <Check className="w-3 h-3 text-emerald-400" />
-                    ) : (
-                      <Copy className="w-3 h-3 text-blue-300" />
-                    )}
-                    <span>
-                      {shortLabel}: {val.slice(0, 16)}
-                    </span>
-                  </button>
-                );
-              })}
-
-              <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg cursor-pointer whitespace-nowrap">
-                <FileScan className="w-3.5 h-3.5" />
-                Já Emiti! Anexar e Ler PDF Automaticamente
-                <input
-                  type="file"
-                  accept=".pdf,image/*"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      handleAttachFileToDoc(activeEmissionSession.doc.id, f);
-                      setActiveEmissionSession(null);
-                    }
-                    e.target.value = '';
-                  }}
-                />
-              </label>
-
-              <button
-                type="button"
-                onClick={() => setActiveEmissionSession(null)}
-                className="p-1.5 text-blue-300 hover:text-white cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        </div>
+        <AssistedEmissionDrawer
+          doc={activeEmissionSession.doc}
+          company={activeEmissionSession.company}
+          copiedFieldLabel={activeEmissionSession.copiedFieldLabel}
+          copiedValue={activeEmissionSession.copiedValue}
+          copiedId={copiedId}
+          onCopyText={(id, val, label) => handleCopyText(id, val, label)}
+          onAttachEmittedPdf={(docId, file) => {
+            handleAttachFileToDoc(docId, file);
+            setActiveEmissionSession(null);
+          }}
+          onOpenTampermonkeyGuide={() => setShowTampermonkeyModal(true)}
+          onClose={() => setActiveEmissionSession(null)}
+        />
       )}
 
       {/* ====================================================================
           MAIN VIEWPORT
       ==================================================================== */}
       <main className="flex-1 max-w-[1440px] w-full mx-auto px-6 py-5 space-y-5">
-        {/* RESUMO EXECUTIVO COMPACTO */}
+        {/* RESUMO EXECUTIVO COMPACTO (6 CARDS COM SEPARAÇÃO DE SEM DATA INFORMADA) */}
         <section aria-label="Resumo de Status">
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
             <button
               type="button"
               onClick={() => {
                 setStatusFilter('all');
                 setActiveSection('dashboard');
               }}
-              className={`flex items-center justify-between px-4 py-3 rounded-xl border text-left transition-all cursor-pointer ${
-                statusFilter === 'all'
+              className={`flex items-center justify-between px-3.5 py-3 rounded-xl border text-left transition-all cursor-pointer ${
+                statusFilter === 'all' && activeSection === 'dashboard'
                   ? 'bg-white dark:bg-slate-900 border-blue-600 dark:border-blue-500 ring-1 ring-blue-600/20'
                   : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300'
               }`}
@@ -2772,7 +2785,7 @@ export default function App() {
                 setStatusFilter(statusFilter === 'vigente' ? 'all' : 'vigente');
                 setActiveSection('dashboard');
               }}
-              className={`flex items-center justify-between px-4 py-3 rounded-xl border text-left transition-all cursor-pointer ${
+              className={`flex items-center justify-between px-3.5 py-3 rounded-xl border text-left transition-all cursor-pointer ${
                 statusFilter === 'vigente'
                   ? 'bg-emerald-50/80 dark:bg-emerald-950/30 border-emerald-600 dark:border-emerald-500'
                   : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-emerald-500/50'
@@ -2795,7 +2808,7 @@ export default function App() {
                 setStatusFilter(statusFilter === 'atencao' ? 'all' : 'atencao');
                 setActiveSection('dashboard');
               }}
-              className={`flex items-center justify-between px-4 py-3 rounded-xl border text-left transition-all cursor-pointer ${
+              className={`flex items-center justify-between px-3.5 py-3 rounded-xl border text-left transition-all cursor-pointer ${
                 statusFilter === 'atencao'
                   ? 'bg-amber-50/80 dark:bg-amber-950/30 border-amber-600 dark:border-amber-500'
                   : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-amber-500/50'
@@ -2803,7 +2816,7 @@ export default function App() {
             >
               <div>
                 <div className="text-xs font-medium text-amber-700 dark:text-amber-400">
-                  A Vencer (1-{warningThresholdDays}d)
+                  Próximas (1-{warningThresholdDays}d)
                 </div>
                 <div className="text-xl font-bold font-mono tabular-nums text-amber-700 dark:text-amber-400 mt-0.5">
                   {summaryCounts.atencao}
@@ -2818,7 +2831,7 @@ export default function App() {
                 setStatusFilter(statusFilter === 'vencido' ? 'all' : 'vencido');
                 setActiveSection('dashboard');
               }}
-              className={`flex items-center justify-between px-4 py-3 rounded-xl border text-left transition-all cursor-pointer ${
+              className={`flex items-center justify-between px-3.5 py-3 rounded-xl border text-left transition-all cursor-pointer ${
                 statusFilter === 'vencido'
                   ? 'bg-red-50/80 dark:bg-red-950/30 border-red-600 dark:border-red-500'
                   : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-red-500/50'
@@ -2826,7 +2839,7 @@ export default function App() {
             >
               <div>
                 <div className="text-xs font-medium text-red-700 dark:text-red-400">
-                  Vencidos / Sem Data
+                  Vencidas
                 </div>
                 <div className="text-xl font-bold font-mono tabular-nums text-red-700 dark:text-red-400 mt-0.5">
                   {summaryCounts.vencido}
@@ -2838,10 +2851,33 @@ export default function App() {
             <button
               type="button"
               onClick={() => {
+                setStatusFilter(statusFilter === 'sem_data' ? 'all' : 'sem_data');
+                setActiveSection('dashboard');
+              }}
+              className={`flex items-center justify-between px-3.5 py-3 rounded-xl border text-left transition-all cursor-pointer ${
+                statusFilter === 'sem_data'
+                  ? 'bg-slate-200/80 dark:bg-slate-800 border-slate-500'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-400'
+              }`}
+            >
+              <div>
+                <div className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                  Sem Data Informada
+                </div>
+                <div className="text-xl font-bold font-mono tabular-nums text-slate-700 dark:text-slate-200 mt-0.5">
+                  {summaryCounts.sem_data + summaryCounts.aguardando_conferencia}
+                </div>
+              </div>
+              <Clock className="w-5 h-5 text-slate-500 shrink-0" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
                 setStatusFilter(statusFilter === 'permanente' ? 'all' : 'permanente');
                 setActiveSection('dashboard');
               }}
-              className={`flex items-center justify-between px-4 py-3 rounded-xl border text-left transition-all cursor-pointer col-span-2 sm:col-span-1 ${
+              className={`flex items-center justify-between px-3.5 py-3 rounded-xl border text-left transition-all cursor-pointer ${
                 statusFilter === 'permanente'
                   ? 'bg-blue-50/80 dark:bg-blue-950/30 border-blue-600 dark:border-blue-500'
                   : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-blue-500/50'
@@ -2865,6 +2901,13 @@ export default function App() {
         ==================================================================== */}
         {activeSection === 'dashboard' && (
           <section className="space-y-3">
+            {/* Barra de Importação em Lote Drag & Drop */}
+            <BatchPdfImportView
+              isProcessing={isSmartReadingBatch}
+              progressText={readingProgressText}
+              onSelectFiles={(files, useAi) => handleSmartUploadAndMatch(files, useAi)}
+            />
+
             {/* Barra de Busca e Filtro Rápido */}
             <div className="p-3.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
               <div className="relative flex-1">
@@ -2978,11 +3021,14 @@ export default function App() {
                   const isVencido = ev.status === 'vencido';
                   const isAtencao = ev.status === 'atencao';
                   const isVigente = ev.status === 'vigente';
+                  const isSemData = ev.status === 'sem_data';
+                  const isAguardandoConferencia = ev.status === 'aguardando_conferencia';
                   const isEditingThisUrl =
                     inlineEdit?.docId === doc.id && inlineEdit.field === 'emitterUrl';
                   const isAnalyzingThis = analyzingDocId === doc.id;
                   const compForDoc = docCompany || activeCompany;
                   const targetAutoUrl = buildAutoFillTargetUrl(doc.emitterUrl, compForDoc);
+                  const docHistCount = documentHistory.filter((h) => h.documentId === doc.id).length;
 
                   return (
                     <div
@@ -3003,15 +3049,18 @@ export default function App() {
                           </span>
 
                           {/* Status Icon + Countdown */}
-                          <div className="w-[130px] shrink-0 flex items-center gap-1.5">
+                          <div className="w-[140px] shrink-0 flex items-center gap-1.5">
                             {isVencido && (
                               <AlertOctagon className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
                             )}
-                            {isAtencao && (
+                            {(isAtencao || isAguardandoConferencia) && (
                               <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
                             )}
                             {isVigente && (
                               <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                            )}
+                            {isSemData && (
+                              <Clock className="w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0" />
                             )}
                             {ev.status === 'permanente' && (
                               <ShieldCheck className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
@@ -3021,10 +3070,12 @@ export default function App() {
                                 className={`text-xs font-bold ${
                                   isVencido
                                     ? 'text-red-700 dark:text-red-400'
-                                    : isAtencao
+                                    : isAtencao || isAguardandoConferencia
                                     ? 'text-amber-700 dark:text-amber-400'
                                     : isVigente
                                     ? 'text-emerald-700 dark:text-emerald-400'
+                                    : isSemData
+                                    ? 'text-slate-600 dark:text-slate-300'
                                     : 'text-blue-700 dark:text-blue-400'
                                 }`}
                               >
@@ -3075,10 +3126,21 @@ export default function App() {
                                 </>
                               )}
                               <span>{doc.issuer || 'Definir órgão'}</span>
+                              {doc.controlCode && (
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span className="font-mono text-emerald-700 dark:text-emerald-400">
+                                    Cód: {doc.controlCode}
+                                  </span>
+                                </>
+                              )}
                               {doc.notes && (
                                 <>
                                   <span aria-hidden="true">·</span>
-                                  <span className="text-slate-400 dark:text-slate-500 truncate max-w-md" title={doc.notes}>
+                                  <span
+                                    className="text-slate-400 dark:text-slate-500 truncate max-w-md"
+                                    title={doc.notes}
+                                  >
                                     {doc.notes}
                                   </span>
                                 </>
@@ -3087,7 +3149,7 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* COLUNA 2: Datas Compactas + ⚡ Emitir Auto + Anexar/Ler PDF + Renovar */}
+                        {/* COLUNA 2: Datas Compactas + EMITIR CERTIDÃO + Anexar/Ler PDF + Renovar + Histórico */}
                         <div className="flex flex-wrap items-center justify-between xl:justify-end gap-2 sm:gap-2.5 pt-2 xl:pt-0 border-t xl:border-t-0 border-slate-100 dark:border-slate-800/70">
                           {/* Bloco de Datas (Emissão | Prazo | Vencimento) */}
                           <div className="flex items-center gap-3 bg-slate-50 dark:bg-slate-950/90 px-3 py-1.5 rounded-lg border border-slate-200/80 dark:border-slate-800 text-xs">
@@ -3215,13 +3277,13 @@ export default function App() {
                                 >
                                   {doc.expirationDate
                                     ? formatDateBR(doc.expirationDate)
-                                    : 'Configurar'}
+                                    : 'Sem data'}
                                 </button>
                               )}
                             </div>
                           </div>
 
-                          {/* Bloco ⚡ EMITIR AUTO + Editar Link */}
+                          {/* Bloco ⚡ EMITIR CERTIDÃO + Editar Link */}
                           <div className="flex items-center gap-1">
                             {doc.emitterUrl ? (
                               <a
@@ -3230,9 +3292,10 @@ export default function App() {
                                 rel="noopener noreferrer"
                                 onClick={() => handleSmartEmitClick(doc, compForDoc)}
                                 className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-blue-700 dark:text-blue-200 bg-blue-50 dark:bg-blue-950/70 hover:bg-blue-100 dark:hover:bg-blue-900 border border-blue-200 dark:border-blue-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                                title="Abre o portal oficial e aciona o Assistente de Emissão com os dados da empresa selecionada"
                               >
                                 <Zap className="w-3.5 h-3.5 text-amber-500" />
-                                Emitir Auto
+                                Emitir Certidão
                                 <ExternalLink className="w-3 h-3 opacity-70" />
                               </a>
                             ) : (
@@ -3308,7 +3371,7 @@ export default function App() {
                                 )}
                                 <label
                                   className="p-1.5 text-slate-500 hover:text-emerald-600 bg-slate-100 dark:bg-slate-800 rounded-lg cursor-pointer"
-                                  title="Anexar novo PDF e ler datas automaticamente"
+                                  title="Substituir PDF (preserva o anterior no Histórico e abre Conferir Dados)"
                                 >
                                   <Upload className="w-3.5 h-3.5" />
                                   <input
@@ -3326,7 +3389,7 @@ export default function App() {
                             ) : (
                               <label
                                 className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-600 hover:text-white rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                                title="Anexar PDF: o sistema lê a Data de Emissão e Vencimento sozinho!"
+                                title="Anexar PDF: leitura gratuita e conferência de dados antes de salvar!"
                               >
                                 <Upload className="w-3.5 h-3.5" />
                                 Anexar PDF
@@ -3344,7 +3407,7 @@ export default function App() {
                             )}
                           </div>
 
-                          {/* Ações: Renovar + Editar + Excluir */}
+                          {/* Ações: Renovar + Histórico + Editar + Excluir */}
                           <div className="flex items-center gap-1">
                             <button
                               type="button"
@@ -3353,6 +3416,26 @@ export default function App() {
                             >
                               <RefreshCw className="w-3.5 h-3.5" />
                               Renovar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setHistoryFilterDocId(doc.id);
+                                setActiveSection('history');
+                              }}
+                              className={`p-1.5 rounded-lg cursor-pointer flex items-center gap-0.5 ${
+                                docHistCount > 0
+                                  ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100'
+                                  : 'text-slate-500 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800'
+                              }`}
+                              title="Histórico de versões desta certidão"
+                            >
+                              <History className="w-3.5 h-3.5" />
+                              {docHistCount > 0 && (
+                                <span className="text-[10px] font-mono font-bold">
+                                  {docHistCount}
+                                </span>
+                              )}
                             </button>
                             <button
                               type="button"
@@ -3432,6 +3515,64 @@ export default function App() {
               )}
             </div>
           </section>
+        )}
+
+        {/* ====================================================================
+            VIEW 1B: IMPORTAR VÁRIOS PDFS EM LOTE
+        ==================================================================== */}
+        {activeSection === 'batch_import' && (
+          <section className="space-y-4">
+            <BatchPdfImportView
+              isProcessing={isSmartReadingBatch}
+              progressText={readingProgressText}
+              onSelectFiles={(files, useAi) => handleSmartUploadAndMatch(files, useAi)}
+            />
+          </section>
+        )}
+
+        {/* ====================================================================
+            VIEW 1C: CENTRAL DE PENDÊNCIAS E ALERTAS
+        ==================================================================== */}
+        {activeSection === 'pendencias' && (
+          <PendenciasCenterView
+            enrichedDocuments={enrichedDocuments}
+            companies={companies}
+            warningThresholdDays={warningThresholdDays}
+            onStartAssistedEmission={(doc, comp) => handleSmartEmitClick(doc, comp)}
+            onOpenQuickRenew={(doc) => openQuickRenew(doc)}
+            onAttachFileToDoc={(docId, file) => handleAttachFileToDoc(docId, file)}
+            onApproveReviewDoc={(docId) => {
+              setDocuments((prev) =>
+                prev.map((d) =>
+                  d.id === docId
+                    ? { ...d, awaitingReview: false, updatedAt: new Date().toISOString() }
+                    : d
+                )
+              );
+              showToast('Documento marcado como conferido!');
+            }}
+            onGoToCompanyDb={(companyId) => {
+              setSelectedCompanyId(companyId);
+              setActiveSection('company_db');
+            }}
+          />
+        )}
+
+        {/* ====================================================================
+            VIEW 1D: HISTÓRICO DE CERTIDÕES E DOCUMENTOS SUBSTITUÍDOS
+        ==================================================================== */}
+        {activeSection === 'history' && (
+          <DocumentHistoryView
+            historyEntries={documentHistory}
+            companies={companies}
+            selectedCompanyId={selectedCompanyId}
+            filterDocumentId={historyFilterDocId}
+            onClearDocFilter={() => setHistoryFilterDocId(null)}
+            onViewHistoryAttachment={(entry) => handleViewHistoryAttachment(entry)}
+            onDownloadHistoryAttachment={(entry) => handleDownloadHistoryAttachment(entry)}
+            onRestoreHistoryVersion={(entry) => handleRestoreHistoryVersion(entry)}
+            onDeleteHistoryEntry={(entryId) => handleDeleteHistoryEntry(entryId)}
+          />
         )}
 
         {/* ====================================================================
@@ -4827,6 +4968,28 @@ export default function App() {
       )}
 
       {/* ====================================================================
+          MODAL: CONFERIR DADOS EXTRAÍDOS DE PDF (AVULSO OU EM LOTE)
+      ==================================================================== */}
+      {pendingReviewItems.length > 0 && (
+        <ReviewExtractionModal
+          items={pendingReviewItems}
+          companies={companies}
+          documents={documents}
+          isProcessingMore={isSmartReadingBatch}
+          processingStatusText={readingProgressText}
+          onUpdateItem={(tempId, updater) =>
+            setPendingReviewItems((prev) =>
+              prev.map((it) => (it.tempId === tempId ? updater(it) : it))
+            )
+          }
+          onRunGeminiEnrichItem={(tempId) => handleRunGeminiEnrichItem(tempId)}
+          onAddMoreFiles={(files) => handleSmartUploadAndMatch(files)}
+          onConfirmAllSelected={() => handleConfirmPendingReviews()}
+          onCancel={() => setPendingReviewItems([])}
+        />
+      )}
+
+      {/* ====================================================================
           MODAL: DELETE CONFIRMATION
       ==================================================================== */}
       {deleteConfirmId && (
@@ -4869,7 +5032,7 @@ export default function App() {
       <footer className="mt-auto border-t border-slate-200 dark:border-slate-800 py-4 px-6 text-xs text-slate-500 dark:text-slate-400">
         <div className="max-w-[1440px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           <span>
-            Mago das Licitações — Gestão Multi-Empresas, Leitura Automática de PDFs & Autopreenchimento (Piauí)
+            Mago das Licitações — Emissão Assistida, Leitura Gratuita de PDFs (PDF.js + OCR), Lote e Histórico (Piauí)
           </span>
           <span>Banco de dados local sincronizado automaticamente</span>
         </div>

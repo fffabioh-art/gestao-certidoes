@@ -29,6 +29,17 @@ function getGeminiClient(): GoogleGenAI {
 // Endpoint: Read & Extract structured data from an attached PDF or Image (Certidão, Cartão CNPJ, Contrato Social, Alvará, etc.)
 app.post('/api/analyze-document', async (req, res) => {
   try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+      res.status(200).json({
+        success: false,
+        available: false,
+        data: null,
+        message: 'Extração local gratuita ativa (PDF.js + Tesseract.js).',
+      });
+      return;
+    }
+
     const { dataUrl, fileName, mode } = req.body as {
       dataUrl?: string;
       fileName?: string;
@@ -54,11 +65,12 @@ app.post('/api/analyze-document', async (req, res) => {
     const promptText = `Você é um especialista jurídico e contábil em licitações públicas brasileiras (especialmente do Estado do Piauí - SEFAZ-PI, PGE-PI, JUCEPI, TJPI, Prefeituras, Receita Federal, TST, FGTS/Caixa, CREA/CRQ/CRBio).
 Analise o documento anexo (${fileName || 'documento.pdf'}) no modo "${mode || 'auto_match'}" e extraia TODOS os dados com máxima precisão.
 
-Regras importantes para datas e prazos:
+Regras importantes:
 1. Converta todas as datas para o formato ISO "YYYY-MM-DD" (ex: "14/09/2026" -> "2026-09-14").
 2. Se o documento informar a Data de Emissão e disser "Válida por X dias" (ex: 30, 60, 90, 180 dias) sem exibir a data final explícita, calcule a Data de Vencimento somando os dias à Data de Emissão.
 3. Se for Contrato Social, QSA, Cartão de Inscrição Estadual/Municipal sem vencimento ou Atestado de Capacidade Técnica, marque isPermanent como true.
-4. Extraia também todos os dados cadastrais da empresa presentes no documento (Razão Social, Nome Fantasia, CNPJ no formato 00.000.000/0001-00, Inscrição Estadual IE, Inscrição Municipal IM/CMC, NIRE, Endereço, CEP, Município/UF, E-mail, Telefone, Nome do Sócio Administrador, CPF do Sócio, Nome do Responsável Técnico e Registro no Conselho).`;
+4. Se o documento estiver ilegível ou contraditório, não invente dados — deixe os campos incertos vazios.
+5. Extraia Número da Certidão, Código de Autenticidade/Controle, Situação descrita no documento (ex: Negativa, Positiva com Efeito de Negativa, Regular, Ativa) e todos os dados cadastrais da empresa.`;
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.8-flash',
@@ -115,13 +127,21 @@ Regras importantes para datas e prazos:
               type: Type.BOOLEAN,
               description: 'True se o documento for de prazo indeterminado (Contrato Social, QSA, Atestado Técnico, IE/IM).',
             },
+            certificateNumber: {
+              type: Type.STRING,
+              description: 'Número da certidão, licença ou documento se constar.',
+            },
             controlCode: {
               type: Type.STRING,
-              description: 'Código de controle, autenticidade ou número da certidão/licença.',
+              description: 'Código de controle, autenticidade ou chave de validação.',
+            },
+            documentSituation: {
+              type: Type.STRING,
+              description: 'Situação descrita no documento (ex: Certidão Negativa, Positiva com Efeito de Negativa, Regular, Ativa).',
             },
             summaryNotes: {
               type: Type.STRING,
-              description: 'Resumo curto da situação do documento (ex: Certidão Negativa emitida sob código X, sem pendências).',
+              description: 'Resumo curto da situação do documento.',
             },
             companyData: {
               type: Type.OBJECT,
@@ -154,7 +174,7 @@ Regras importantes para datas e prazos:
 
     const rawText = (response.text ?? '{}').trim();
     const extracted = JSON.parse(rawText);
-    res.json({ success: true, data: extracted });
+    res.json({ success: true, available: true, data: extracted });
   } catch (error: unknown) {
     console.error('Erro ao analisar documento no servidor:', error);
     const message =
