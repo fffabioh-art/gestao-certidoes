@@ -5143,8 +5143,18 @@ export default function App() {
 
               {/* Seção 3: Sócio Administrador e CNH */}
               <div className="p-3.5 bg-slate-50/60 dark:bg-slate-950/40 border border-slate-200/80 dark:border-slate-800/80 rounded-xl space-y-3">
-                <div className="text-xs font-bold uppercase tracking-wider text-purple-700 dark:text-purple-400">
-                  3. Sócio Administrador & Representante Legal (Dados da CNH/RG)
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="text-xs font-bold uppercase tracking-wider text-purple-700 dark:text-purple-400 flex items-center gap-2">
+                    <span>3. Sócio Administrador & Representante Legal</span>
+                    <span className="px-1.5 py-0.5 text-[9px] font-extrabold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/90 dark:text-emerald-300 rounded border border-emerald-300 dark:border-emerald-700 uppercase">
+                      Prioridade: CNH do Sócio
+                    </span>
+                  </div>
+                  {companyModal.profile.companyDocuments?.some((d) => d.docType === 'cnh_socio') && (
+                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800">
+                      <CheckCircle2 className="w-3 h-3" /> CNH Oficial Vinculada
+                    </span>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

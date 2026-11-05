@@ -27,6 +27,7 @@ export interface CompanyDocReadResult {
   populatedFieldLabels: string[];
   summary: string;
   rawTextSample: string;
+  isCnhPartnerPriority?: boolean;
 }
 
 /**
@@ -395,9 +396,43 @@ export async function readCompanyDocument(
     /CADASTRO\s+MERCANTIL/i.test(normText);
 
   // --------------------------------------------------------------------------
-  // EXTRAÇÃO ESPECÍFICA POR TIPO
+  // EXTRAÇÃO ESPECÍFICA POR TIPO (PRIORIDADE MÁXIMA PARA CNH NOS DADOS DE SÓCIO)
   // --------------------------------------------------------------------------
-  if (isCartaoCnpj) {
+  let isCnhPartnerPriority = false;
+
+  if (hintDocType === 'cnh_socio' || isCnh) {
+    detectedType = 'cnh_socio';
+    detectedTitle = 'CNH do Sócio Administrador';
+    isCnhPartnerPriority = true;
+
+    // CPF DO SÓCIO (PRIORIDADE MÁXIMA)
+    const partnerCpf = findBestCPF(normText, extracted.cnpj);
+    if (partnerCpf) {
+      extracted.partnerCpf = partnerCpf;
+      populatedLabels.push('CPF do Sócio (Prioridade CNH)');
+    }
+
+    // NOME DO SÓCIO (PRIORIDADE MÁXIMA)
+    const partnerName = findPartnerName(normText, 'cnh_socio');
+    if (partnerName) {
+      extracted.partnerName = partnerName;
+      populatedLabels.push('Nome do Sócio (Prioridade CNH)');
+    }
+
+    // DATA DE NASCIMENTO (PRIORIDADE MÁXIMA)
+    const birthDate = findPartnerBirthDate(normText);
+    if (birthDate) {
+      extracted.partnerBirthDate = birthDate;
+      populatedLabels.push('Data de Nascimento (Prioridade CNH)');
+    }
+
+    // RG (PRIORIDADE MÁXIMA)
+    const rg = findPartnerRG(normText);
+    if (rg) {
+      extracted.partnerRg = rg;
+      populatedLabels.push('RG do Sócio (Prioridade CNH)');
+    }
+  } else if (isCartaoCnpj) {
     detectedType = 'cnpj';
     detectedTitle = 'Cartão CNPJ (Receita Federal)';
 
@@ -521,37 +556,6 @@ export async function readCompanyDocument(
     if (phoneMatch) {
       extracted.phone = phoneMatch[1].trim();
       populatedLabels.push('Telefone');
-    }
-  } else if (isCnh) {
-    detectedType = 'cnh_socio';
-    detectedTitle = 'CNH do Sócio Administrador';
-
-    // CPF DO SÓCIO
-    const partnerCpf = findBestCPF(normText, extracted.cnpj);
-    if (partnerCpf) {
-      extracted.partnerCpf = partnerCpf;
-      populatedLabels.push('CPF do Sócio');
-    }
-
-    // NOME DO SÓCIO
-    const partnerName = findPartnerName(normText, 'cnh_socio');
-    if (partnerName) {
-      extracted.partnerName = partnerName;
-      populatedLabels.push('Nome do Sócio');
-    }
-
-    // DATA DE NASCIMENTO
-    const birthDate = findPartnerBirthDate(normText);
-    if (birthDate) {
-      extracted.partnerBirthDate = birthDate;
-      populatedLabels.push('Data de Nascimento do Sócio');
-    }
-
-    // RG
-    const rg = findPartnerRG(normText);
-    if (rg) {
-      extracted.partnerRg = rg;
-      populatedLabels.push('RG do Sócio');
     }
   } else if (isRg) {
     detectedType = 'rg_socio';
@@ -761,5 +765,6 @@ export async function readCompanyDocument(
     populatedFieldLabels: populatedLabels,
     summary,
     rawTextSample: normText.slice(0, 300),
+    isCnhPartnerPriority,
   };
 }
