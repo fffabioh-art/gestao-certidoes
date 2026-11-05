@@ -134,43 +134,25 @@ export const CompanyDocumentAttachmentManager: React.FC<CompanyDocumentAttachmen
         updatedDocs.push(newAttachment);
       }
 
-      // ======================================================================
-      // REGRA MESTRA: CNH É A FONTE PRIORITÁRIA ABSOLUTA PARA CPF E DADOS DO SÓCIO
-      // (CPF, Nome do Sócio Administrador, RG e Data de Nascimento).
-      // ======================================================================
-      const isCnhUpload = effectiveType === 'cnh_socio' || result.isCnhPartnerPriority;
-      const partnerFields = ['partnerCpf', 'partnerName', 'partnerRg', 'partnerBirthDate'];
-      const hasCnhInAttachments = updatedDocs.some((d) => d.docType === 'cnh_socio');
-
-      // Atualiza o perfil da empresa aplicando estritamente a prioridade da CNH
+      // Merge extracted fields into company profile
       const updatedProfile: Partial<CompanyProfile> = {
         ...company,
         companyDocuments: updatedDocs,
       };
 
+      // Only overwrite if extracted field has a value
       Object.entries(result.extractedFields).forEach(([k, v]) => {
         if (v !== undefined && v !== '') {
-          if (partnerFields.includes(k)) {
-            // Se o upload atual for CNH: SEMPRE sobrepõe e define com PRIORIDADE MÁXIMA!
-            if (isCnhUpload) {
-              (updatedProfile as any)[k] = v;
-              if (k === 'partnerCpf') (updatedProfile as any).representativeCpf = v;
-              if (k === 'partnerName') (updatedProfile as any).representativeName = v;
-            } else {
-              // Se o upload NÃO for CNH:
-              // Se a empresa já possui CNH anexada ou o campo já foi preenchido,
-              // NÃO permite que outro documento sobrescreva os dados de sócio da CNH!
-              const currentVal = (company as any)[k];
-              if (!hasCnhInAttachments && (!currentVal || currentVal === '')) {
-                (updatedProfile as any)[k] = v;
-                if (k === 'partnerCpf') (updatedProfile as any).representativeCpf = v;
-                if (k === 'partnerName') (updatedProfile as any).representativeName = v;
-              }
-            }
-          } else {
-            // Campos corporativos (CNPJ, Razão Social, Endereço, etc.) são atualizados normalmente
-            (updatedProfile as any)[k] = v;
-            if (k === 'companyName') (updatedProfile as any).corporateName = v;
+          (updatedProfile as any)[k] = v;
+          // Aliases para máxima compatibilidade entre visões
+          if (k === 'partnerCpf') {
+            (updatedProfile as any).representativeCpf = v;
+          }
+          if (k === 'partnerName') {
+            (updatedProfile as any).representativeName = v;
+          }
+          if (k === 'companyName') {
+            (updatedProfile as any).corporateName = v;
           }
         }
       });
@@ -179,9 +161,7 @@ export const CompanyDocumentAttachmentManager: React.FC<CompanyDocumentAttachmen
 
       if (result.populatedFieldLabels.length > 0) {
         setSuccessBanner({
-          title: isCnhUpload
-            ? `⭐ Prioridade CNH Aplicada: Dados do Sócio extraídos com máxima prioridade da CNH!`
-            : `Leitura concluída com sucesso (${effectiveTitle})!`,
+          title: `Leitura concluída com sucesso (${effectiveTitle})!`,
           fields: result.populatedFieldLabels,
         });
       }
@@ -286,14 +266,11 @@ export const CompanyDocumentAttachmentManager: React.FC<CompanyDocumentAttachmen
           type="button"
           disabled={isReading}
           onClick={() => triggerUpload('cnh_socio')}
-          className="flex items-center justify-center gap-1.5 p-2 text-xs font-bold text-emerald-800 dark:text-emerald-200 bg-emerald-100/90 hover:bg-emerald-200/90 dark:bg-emerald-950/80 dark:hover:bg-emerald-900 border-2 border-emerald-500/80 dark:border-emerald-500/80 rounded-lg transition-all cursor-pointer shadow-xs"
-          title="Anexar CNH do Sócio: FONTE PRIORITÁRIA para CPF, Nome do Sócio, RG e Data de Nascimento"
+          className="flex items-center justify-center gap-1.5 p-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50/80 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 border border-emerald-200 dark:border-emerald-800/80 rounded-lg transition-colors cursor-pointer shadow-2xs"
+          title="Anexar CNH do Sócio: lê Nome do Sócio, CPF, RG e Data de Nascimento"
         >
-          <UserCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+          <UserCheck className="w-3.5 h-3.5" />
           <span>+ CNH do Sócio</span>
-          <span className="text-[9px] px-1 py-0.2 rounded bg-emerald-600 text-white font-extrabold uppercase tracking-tight">
-            Prioritário
-          </span>
         </button>
 
         <button

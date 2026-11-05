@@ -563,16 +563,9 @@ export const CompanyManagementView: React.FC<CompanyManagementViewProps> = ({
 
                       return (
                         <div key={sec.id} className="p-4 rounded-xl bg-slate-950/40 border border-slate-800/80 space-y-4">
-                          <div className="flex items-center justify-between flex-wrap gap-2">
-                            <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
-                              {sec.label}
-                            </h4>
-                            {sec.id === 'partner' && (
-                              <span className="px-2 py-0.5 text-[10px] font-extrabold bg-emerald-950/80 text-emerald-300 rounded border border-emerald-700/60 uppercase">
-                                Prioridade: CNH do Sócio
-                              </span>
-                            )}
-                          </div>
+                          <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
+                            {sec.label}
+                          </h4>
 
                           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5">
                             {fieldsInSection.map((field) => {
