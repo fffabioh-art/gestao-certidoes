@@ -43,6 +43,9 @@ import {
   Settings,
   MoreVertical,
   FileX,
+  Tag,
+  ChevronDown,
+  Edit2,
 } from 'lucide-react';
 import {
   CertidaoDocument,
@@ -58,6 +61,7 @@ import {
 import {
   onlyDigits,
   formatCNPJ,
+  formatCPF,
   isValidCNPJ,
   isValidCPF,
   computeDocumentFingerprint,
@@ -81,6 +85,7 @@ import { SettingsCenterView } from './components/SettingsCenterView';
 import { CompanyManagementView } from './components/CompanyManagementView';
 import { DeletePdfModal } from './components/DeletePdfModal';
 import { PdfViewerModal } from './components/PdfViewerModal';
+import { CompanyDocumentAttachmentManager } from './components/CompanyDocumentAttachmentManager';
 import {
   mergeWithDefaultSettings,
   buildDefaultAppSettings,
@@ -1133,10 +1138,15 @@ export default function App() {
     targetUrl: string;
   } | null>(null);
 
+  // Navigation dropdown and confirmation states
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [companyToDeleteConfirm, setCompanyToDeleteConfirm] = useState<CompanyProfile | null>(null);
+
   // Inline cell editing state
   const [inlineEdit, setInlineEdit] = useState<{
     docId: string;
     field:
+      | 'highlightName'
       | 'name'
       | 'issuer'
       | 'registrationCode'
@@ -1222,11 +1232,14 @@ export default function App() {
       if (statusFilter !== 'all' && ev.status !== statusFilter) return false;
       if (categoryFilter !== 'all' && doc.category !== categoryFilter) return false;
       if (q) {
-        const hay = `${doc.name} ${doc.issuer} ${doc.category} ${doc.registrationCode} ${doc.controlCode || ''} ${doc.certificateNumber || ''} ${doc.notes} ${comp?.companyName || ''}`.toLowerCase();
+        const hay = `${doc.highlightName || ''} ${doc.name} ${doc.issuer} ${doc.category} ${doc.registrationCode} ${doc.controlCode || ''} ${doc.certificateNumber || ''} ${doc.notes} ${comp?.companyName || ''}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
+
+    // Helper to get sort name prioritizing highlightName (apelido de destaque)
+    const getDocSortName = (doc: CertidaoDocument) => (doc.highlightName?.trim() || doc.name);
 
     list.sort((a, b) => {
       if (sortBy === 'priority') {
@@ -1244,10 +1257,10 @@ export default function App() {
         if (a.eval.sortWeight !== b.eval.sortWeight) {
           return a.eval.sortWeight - b.eval.sortWeight;
         }
-        return a.doc.name.localeCompare(b.doc.name, 'pt-BR');
+        return getDocSortName(a.doc).localeCompare(getDocSortName(b.doc), 'pt-BR');
       }
       if (sortBy === 'name') {
-        return a.doc.name.localeCompare(b.doc.name, 'pt-BR');
+        return getDocSortName(a.doc).localeCompare(getDocSortName(b.doc), 'pt-BR');
       }
       if (sortBy === 'category') {
         const c = a.doc.category.localeCompare(b.doc.category, 'pt-BR');
@@ -1863,6 +1876,8 @@ export default function App() {
           if (value) {
             updated.isPermanent = false;
           }
+        } else if (field === 'highlightName') {
+          updated.highlightName = value.trim() ? value.trim().toUpperCase() : undefined;
         } else if (field === 'name') {
           if (value.trim()) updated.name = value.trim();
         } else if (field === 'issuer') {
@@ -1877,7 +1892,9 @@ export default function App() {
     );
     setInlineEdit(null);
     showToast(
-      field === 'emitterUrl' && syncAllCompanies
+      field === 'highlightName'
+        ? 'Nome de destaque / apelido atualizado com sucesso!'
+        : field === 'emitterUrl' && syncAllCompanies
         ? 'Link de emissão atualizado para todas as empresas!'
         : 'Alteração salva automaticamente.'
     );
@@ -2141,6 +2158,62 @@ export default function App() {
     showToast('Registro removido do histórico.');
   };
 
+  const openCreateCompanyModal = () => {
+    const newComp: CompanyProfile = {
+      id: `comp-${Date.now()}`,
+      companyName: '',
+      tradeName: '',
+      cnpj: '',
+      stateRegistration: '',
+      municipalRegistration: '',
+      nire: '',
+      cnaeMain: '',
+      cityState: 'Teresina - PI',
+      cep: '',
+      address: '',
+      neighborhood: '',
+      phone: '',
+      email: '',
+      partnerName: '',
+      partnerCpf: '',
+      partnerRg: '',
+      partnerBirthDate: '',
+      techResponsibleName: '',
+      techResponsibleCouncil: '',
+      techResponsibleCpf: '',
+      portalAccessNotes: '',
+    };
+    setCompanyModal({
+      isNew: true,
+      profile: newComp,
+      cloneStandardDocs: true,
+    });
+  };
+
+  const openEditCurrentCompanyModal = () => {
+    if (selectedCompanyId === 'all') {
+      showToast('Selecione uma empresa específica para editar seus dados.');
+      return;
+    }
+    setCompanyModal({
+      isNew: false,
+      profile: { ...activeCompany },
+      cloneStandardDocs: false,
+    });
+  };
+
+  const handleRequestDeleteCurrentCompany = () => {
+    if (selectedCompanyId === 'all') {
+      showToast('Selecione uma empresa específica para excluir.');
+      return;
+    }
+    if (companies.length <= 1) {
+      showToast('Mantenha pelo menos uma empresa cadastrada no sistema.');
+      return;
+    }
+    setCompanyToDeleteConfirm(activeCompany);
+  };
+
   const openCreateModal = () => {
     const today = getTodayDateString();
     const targetCompany = selectedCompanyId === 'all' ? companies[0] : activeCompany;
@@ -2149,6 +2222,7 @@ export default function App() {
       id: `doc-${Date.now()}`,
       companyId: targetCompany.id,
       name: '',
+      highlightName: '',
       category: 'Fiscais e Trabalhistas',
       issuer: '',
       emitterUrl: '',
@@ -2513,129 +2587,163 @@ export default function App() {
           Mago das Licitações
         </a>
 
-        <nav className="hidden xl:flex items-center gap-4 text-xs font-semibold text-slate-600 dark:text-slate-400">
+        <nav className="hidden lg:flex items-center gap-1.5 text-xs font-semibold">
           <button
             type="button"
             onClick={() => setActiveSection('dashboard')}
-            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
               activeSection === 'dashboard'
-                ? 'border-blue-600 text-slate-900 dark:text-white dark:border-blue-400'
-                : 'border-transparent hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-bold'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
-            Lista de Certidões
+            <FileText className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            <span>Certidões</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setActiveSection('batch_import')}
-            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer flex items-center gap-1 ${
-              activeSection === 'batch_import'
-                ? 'border-emerald-600 text-emerald-700 dark:text-emerald-300 dark:border-emerald-400'
-                : 'border-transparent hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <FileScan className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-            Importar Vários PDFs
-          </button>
+
           <button
             type="button"
             onClick={() => setActiveSection('companies')}
-            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
               activeSection === 'companies'
-                ? 'border-emerald-600 text-emerald-700 dark:text-emerald-300 dark:border-emerald-400 font-bold'
-                : 'border-transparent hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-bold'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
-            <Building2 className="w-3.5 h-3.5 text-emerald-500" />
-            Central de Empresas ({companies.filter((c) => !c.isArchived).length})
+            <Building2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <span>Empresas ({companies.filter((c) => !c.isArchived).length})</span>
           </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSection('batch_import')}
+            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
+              activeSection === 'batch_import'
+                ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-bold'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <FileScan className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <span>Importar PDFs</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setActiveSection('pendencias')}
-            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer flex items-center gap-1 ${
+            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
               activeSection === 'pendencias'
-                ? 'border-amber-600 text-amber-700 dark:text-amber-300 dark:border-amber-400'
-                : 'border-transparent hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 font-bold'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
-            <ListChecks className="w-3.5 h-3.5 text-amber-500" />
-            Pendências (
-            {summaryCounts.vencido +
-              summaryCounts.atencao +
-              summaryCounts.sem_data +
-              summaryCounts.aguardando_conferencia}
-            )
+            <ListChecks className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+            <span>Pendências</span>
+            {summaryCounts.vencido + summaryCounts.atencao > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-500 text-white">
+                {summaryCounts.vencido + summaryCounts.atencao}
+              </span>
+            )}
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              setHistoryFilterDocId(null);
-              setActiveSection('history');
-            }}
-            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer flex items-center gap-1 ${
-              activeSection === 'history'
-                ? 'border-blue-600 text-slate-900 dark:text-white dark:border-blue-400'
-                : 'border-transparent hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <History className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-            Histórico ({documentHistory.length})
-          </button>
+
           <button
             type="button"
             onClick={() => {
               setSettingsInitialTab(undefined);
               setActiveSection('settings');
             }}
-            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
               activeSection === 'settings'
-                ? 'border-amber-500 text-amber-600 dark:text-amber-300 dark:border-amber-400 font-bold'
-                : 'border-transparent hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 font-bold'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
-            <Settings className="w-3.5 h-3.5 text-amber-400 animate-spin-slow" />
-            Configurações
+            <Settings className="w-4 h-4 text-amber-500" />
+            <span>Configurações</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setActiveSection('company_db')}
-            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
-              activeSection === 'company_db'
-                ? 'border-blue-600 text-slate-900 dark:text-white dark:border-blue-400'
-                : 'border-transparent hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            Ficha Cadastral
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveSection('links')}
-            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
-              activeSection === 'links'
-                ? 'border-blue-600 text-slate-900 dark:text-white dark:border-blue-400'
-                : 'border-transparent hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            Portais & Links
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveSection('backup')}
-            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 border-b-2 cursor-pointer ${
-              activeSection === 'backup'
-                ? 'border-blue-600 text-slate-900 dark:text-white dark:border-blue-400'
-                : 'border-transparent hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            Backup & Planilha
-          </button>
+
+          {/* Dropdown "Mais Ferramentas" para diminuir a poluição visual */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setMoreMenuOpen((v) => !v)}
+              className={`px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center gap-1 ${
+                ['history', 'company_db', 'links', 'backup'].includes(activeSection)
+                  ? 'bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-white font-bold'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
+              }`}
+            >
+              <span>Mais</span>
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+
+            {moreMenuOpen && (
+              <div
+                className="absolute left-0 mt-1 w-56 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl py-1.5 z-40"
+                onClick={() => setMoreMenuOpen(false)}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHistoryFilterDocId(null);
+                    setActiveSection('history');
+                  }}
+                  className="w-full px-3.5 py-2 text-left text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 text-slate-700 dark:text-slate-200"
+                >
+                  <History className="w-4 h-4 text-blue-500" />
+                  <span>Histórico ({documentHistory.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveSection('company_db')}
+                  className="w-full px-3.5 py-2 text-left text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 text-slate-700 dark:text-slate-200"
+                >
+                  <Database className="w-4 h-4 text-purple-500" />
+                  <span>Ficha Cadastral Completa</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveSection('links')}
+                  className="w-full px-3.5 py-2 text-left text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 text-slate-700 dark:text-slate-200"
+                >
+                  <ExternalLink className="w-4 h-4 text-teal-500" />
+                  <span>Portais & Links de Emissão</span>
+                </button>
+                <div className="border-t border-slate-100 dark:border-slate-800 my-1" />
+                <button
+                  type="button"
+                  onClick={() => setActiveSection('backup')}
+                  className="w-full px-3.5 py-2 text-left text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 text-slate-700 dark:text-slate-200"
+                >
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-500" />
+                  <span>Backup & Exportar Planilha</span>
+                </button>
+              </div>
+            )}
+          </div>
         </nav>
 
         <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
+            onClick={openCreateCompanyModal}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-xs"
+            title="Cadastrar uma nova empresa no sistema"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            + Incluir Empresa
+          </button>
+          <button
+            type="button"
+            onClick={openCreateModal}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-xs"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Nova Certidão
+          </button>
+          <button
+            type="button"
             onClick={() => setDarkMode(!darkMode)}
-            className="p-2 rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
             title="Alternar tema claro/escuro"
           >
             {darkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
@@ -2646,31 +2754,23 @@ export default function App() {
               setSettingsInitialTab(undefined);
               setActiveSection('settings');
             }}
-            className="p-2 rounded-lg text-slate-500 hover:text-amber-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+            className="p-1.5 rounded-lg text-slate-500 hover:text-amber-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
             title="Abrir Central de Configurações"
           >
             <Settings className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={openCreateModal}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-sm"
-          >
-            <Plus className="w-4 h-4" />
-            Nova Certidão
           </button>
         </div>
       </header>
 
       {/* ====================================================================
-          BARRA DE SELEÇÃO DE EMPRESA + LEITOR INTELIGENTE DE PDF + DADOS RÁPIDOS
+          BARRA DE SELEÇÃO DE EMPRESA + AÇÕES DIRETAS (INCLUIR / EDITAR / EXCLUIR)
       ==================================================================== */}
       <div className="border-b border-slate-200 dark:border-slate-800 bg-slate-100/90 dark:bg-slate-900/70">
-        <div className="max-w-[1440px] mx-auto px-6 py-3 space-y-2.5">
+        <div className="max-w-[1440px] mx-auto px-6 py-2.5 space-y-2">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-            {/* Left: Company Filter Selector */}
+            {/* Left: Company Selector + Unmissable Inclusion / Exclusion Buttons */}
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800 dark:text-slate-200">
                 <Building2 className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
                 <span>Empresa Ativa:</span>
               </div>
@@ -2678,7 +2778,7 @@ export default function App() {
               <select
                 value={selectedCompanyId}
                 onChange={(e) => setSelectedCompanyId(e.target.value)}
-                className="px-3 py-1.5 text-xs font-semibold bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:border-blue-600 cursor-pointer"
+                className="px-3 py-1.5 text-xs font-bold bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:border-blue-600 cursor-pointer shadow-xs max-w-[280px] sm:max-w-md truncate"
               >
                 {companies.map((c) => (
                   <option key={c.id} value={c.id}>
@@ -2688,7 +2788,54 @@ export default function App() {
                 <option value="all">Ver Todas as Empresas Juntas ({companies.length})</option>
               </select>
 
-              {/* Botão Leitor Inteligente de PDF em Lote / Avulso */}
+              {/* BOTAO CLARO: + INCLUIR EMPRESA */}
+              <button
+                type="button"
+                onClick={openCreateCompanyModal}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition cursor-pointer"
+                title="Cadastrar uma nova empresa no sistema"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                + Incluir Empresa
+              </button>
+
+              {/* BOTAO CLARO: EDITAR EMPRESA ATUAL */}
+              <button
+                type="button"
+                disabled={selectedCompanyId === 'all'}
+                onClick={openEditCurrentCompanyModal}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg shadow-xs cursor-pointer disabled:opacity-40"
+                title="Editar dados da empresa ativa"
+              >
+                <Edit2 className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                Editar Dados
+              </button>
+
+              {/* BOTAO CLARO: EXCLUIR EMPRESA ATUAL */}
+              <button
+                type="button"
+                disabled={selectedCompanyId === 'all' || companies.length <= 1}
+                onClick={handleRequestDeleteCurrentCompany}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900/60 hover:bg-rose-100 dark:hover:bg-rose-900/70 rounded-lg shadow-xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                title={companies.length <= 1 ? 'Mantenha ao menos 1 empresa cadastrada' : 'Excluir ou desativar esta empresa do sistema'}
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                Excluir Empresa
+              </button>
+
+              {/* LINK RAPIDO PARA A CENTRAL DE EMPRESAS */}
+              <button
+                type="button"
+                onClick={() => setActiveSection('companies')}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                title="Abrir Central Completa de Gestão de Empresas"
+              >
+                <span>Todas ({companies.length})</span>
+              </button>
+            </div>
+
+            {/* Right: Leitor PDF rápido + AutoPreenchimento + Alerta Vencimento */}
+            <div className="flex flex-wrap items-center gap-2">
               <input
                 ref={smartPdfInputRef}
                 type="file"
@@ -2704,64 +2851,30 @@ export default function App() {
                 type="button"
                 disabled={isSmartReadingBatch}
                 onClick={() => smartPdfInputRef.current?.click()}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-60"
-                title="Selecione 1 ou vários PDFs: leitura gratuita com PDF.js + OCR Tesseract.js + tela CONFERIR DADOS antes de salvar!"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:border-emerald-500 rounded-lg shadow-xs transition cursor-pointer disabled:opacity-60"
+                title="Importar PDFs para conferência automática"
               >
                 {isSmartReadingBatch ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
                 ) : (
-                  <FileScan className="w-3.5 h-3.5" />
+                  <FileScan className="w-3.5 h-3.5 text-emerald-600" />
                 )}
-                {isSmartReadingBatch
-                  ? readingProgressText || 'Lendo PDFs...'
-                  : 'IMPORTAR VÁRIOS PDFs'}
+                <span>Importar PDFs</span>
               </button>
 
-              <button
-                type="button"
-                onClick={() => setActiveSection('pendencias')}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/70 border border-amber-200 dark:border-amber-800 rounded-lg hover:bg-amber-100 cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <ListChecks className="w-3.5 h-3.5" />
-                Pendências
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setHistoryFilterDocId(null);
-                  setActiveSection('history');
-                }}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <History className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                Histórico ({documentHistory.length})
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveSection('company_db')}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/70 border border-blue-200 dark:border-blue-800 rounded-lg hover:bg-blue-100 cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <Database className="w-3.5 h-3.5" />
-                Ficha da Empresa
-              </button>
-            </div>
-
-            {/* Right: Automation Script + Alert Threshold (60, 30, 15, 7, 1 dias) + Theme Toggle */}
-            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => setShowTampermonkeyModal(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-800 dark:text-amber-300 bg-amber-100/80 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 rounded-lg hover:bg-amber-200/70 cursor-pointer whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-amber-800 dark:text-amber-300 bg-amber-100/70 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 rounded-lg hover:bg-amber-200/70 cursor-pointer"
+                title="Como funciona o preenchimento automático nos sites"
               >
-                <Zap className="w-3.5 h-3.5" />
-                AutoPreenchimento Seguro
+                <Zap className="w-3.5 h-3.5 text-amber-600" />
+                <span>AutoPreenchimento</span>
               </button>
 
               <div className="hidden sm:flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400">
                 <SlidersHorizontal className="w-3.5 h-3.5" />
-                <span>Alerta Vencimento:</span>
+                <span>Alerta:</span>
                 <div className="flex items-center bg-slate-200/80 dark:bg-slate-800 p-0.5 rounded-md">
                   {[60, 30, 15, 7, 1].map((days) => (
                     <button
@@ -2769,11 +2882,11 @@ export default function App() {
                       type="button"
                       onClick={() => {
                         setWarningThresholdDays(days);
-                        showToast(`Alerta de proximidade do vencimento ajustado para ${days} dia(s).`);
+                        showToast(`Alerta de proximidade ajustado para ${days} dias.`);
                       }}
-                      className={`px-2 py-0.5 text-xs font-mono tabular-nums rounded cursor-pointer ${
+                      className={`px-1.5 py-0.5 text-xs font-mono tabular-nums rounded cursor-pointer ${
                         warningThresholdDays === days
-                          ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white font-semibold'
+                          ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white font-semibold shadow-xs'
                           : 'text-slate-600 dark:text-slate-400'
                       }`}
                     >
@@ -2782,18 +2895,6 @@ export default function App() {
                   ))}
                 </div>
               </div>
-
-              <button
-                type="button"
-                onClick={() => setDarkMode((d) => !d)}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer whitespace-nowrap shrink-0"
-              >
-                {darkMode ? (
-                  <Sun className="w-3.5 h-3.5 text-amber-400" />
-                ) : (
-                  <Moon className="w-3.5 h-3.5 text-slate-700" />
-                )}
-              </button>
             </div>
           </div>
 
@@ -3316,32 +3417,137 @@ export default function App() {
 
                           {/* Nome da Certidão & Metadados */}
                           <div className="min-w-0 flex-1">
-                            {inlineEdit?.docId === doc.id && inlineEdit.field === 'name' ? (
-                              <input
-                                type="text"
-                                autoFocus
-                                value={inlineEdit.value}
-                                onChange={(e) =>
-                                  setInlineEdit({ ...inlineEdit, value: e.target.value })
-                                }
-                                onBlur={commitInlineEdit}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') commitInlineEdit();
-                                  if (e.key === 'Escape') setInlineEdit(null);
-                                }}
-                                className="w-full px-2 py-0.5 text-sm font-semibold bg-white dark:bg-slate-950 border border-blue-600 rounded text-slate-900 dark:text-white"
-                              />
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setInlineEdit({ docId: doc.id, field: 'name', value: doc.name })
-                                }
-                                className="text-left text-sm font-semibold text-slate-900 dark:text-slate-100 hover:text-blue-600 dark:hover:text-blue-400 cursor-pointer"
-                              >
-                                {doc.name}
-                              </button>
-                            )}
+                            {/* Editor Inline do Nome de Destaque / Apelido */}
+                            {inlineEdit?.docId === doc.id && inlineEdit.field === 'highlightName' ? (
+                              <div className="flex items-center gap-2 py-1 mb-1.5 bg-amber-50 dark:bg-amber-950/60 p-2 rounded-lg border border-amber-300 dark:border-amber-800">
+                                <span className="text-xs font-black text-amber-800 dark:text-amber-300 uppercase tracking-wide shrink-0">
+                                  Apelido / Destaque:
+                                </span>
+                                <input
+                                  type="text"
+                                  autoFocus
+                                  placeholder="Ex: ESPECÍFICA, SIMPLIFICADA..."
+                                  value={inlineEdit.value}
+                                  onChange={(e) =>
+                                    setInlineEdit({ ...inlineEdit, value: e.target.value })
+                                  }
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') commitInlineEdit();
+                                    if (e.key === 'Escape') setInlineEdit(null);
+                                  }}
+                                  className="flex-1 px-2.5 py-1 text-xs font-bold uppercase tracking-wider bg-white dark:bg-slate-900 border border-amber-500 rounded text-amber-950 dark:text-white focus:outline-none"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={commitInlineEdit}
+                                  className="px-2.5 py-1 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded cursor-pointer"
+                                >
+                                  Salvar
+                                </button>
+                                {doc.highlightName && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setDocuments((prev) =>
+                                        prev.map((d) =>
+                                          d.id === doc.id
+                                            ? { ...d, highlightName: undefined, updatedAt: new Date().toISOString() }
+                                            : d
+                                        )
+                                      );
+                                      setInlineEdit(null);
+                                      showToast('Nome de destaque removido.');
+                                    }}
+                                    className="px-2 py-1 text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-950/50 rounded cursor-pointer"
+                                  >
+                                    Remover
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => setInlineEdit(null)}
+                                  className="px-2 py-1 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 cursor-pointer"
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            ) : doc.highlightName ? (
+                              <div className="flex flex-wrap items-center gap-2 mb-1">
+                                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-amber-500/15 border-2 border-amber-500/40 text-amber-900 dark:text-amber-200 font-black text-sm tracking-wide uppercase shadow-xs">
+                                  <Tag className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                                  <span>{doc.highlightName}</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setInlineEdit({
+                                      docId: doc.id,
+                                      field: 'highlightName',
+                                      value: doc.highlightName || '',
+                                    })
+                                  }
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-semibold text-slate-500 hover:text-amber-700 dark:text-slate-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40 rounded transition cursor-pointer"
+                                  title="Editar apelido de destaque"
+                                >
+                                  <Edit2 className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                                  <span>Renomear Destaque</span>
+                                </button>
+                              </div>
+                            ) : null}
+
+                            {/* Nome Oficial / Legal da Certidão */}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {inlineEdit?.docId === doc.id && inlineEdit.field === 'name' ? (
+                                <input
+                                  type="text"
+                                  autoFocus
+                                  value={inlineEdit.value}
+                                  onChange={(e) =>
+                                    setInlineEdit({ ...inlineEdit, value: e.target.value })
+                                  }
+                                  onBlur={commitInlineEdit}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') commitInlineEdit();
+                                    if (e.key === 'Escape') setInlineEdit(null);
+                                  }}
+                                  className="w-full px-2 py-0.5 text-sm font-semibold bg-white dark:bg-slate-950 border border-blue-600 rounded text-slate-900 dark:text-white"
+                                />
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setInlineEdit({ docId: doc.id, field: 'name', value: doc.name })
+                                  }
+                                  className={`text-left cursor-pointer ${
+                                    doc.highlightName
+                                      ? 'text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-300'
+                                      : 'text-sm font-bold text-slate-900 dark:text-slate-100 hover:text-blue-600 dark:hover:text-blue-400'
+                                  }`}
+                                  title="Clique para editar o nome oficial"
+                                >
+                                  {doc.name}
+                                </button>
+                              )}
+
+                              {/* Botão de Adicionar Apelido de Destaque quando não houver */}
+                              {!doc.highlightName && inlineEdit?.docId !== doc.id && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setInlineEdit({
+                                      docId: doc.id,
+                                      field: 'highlightName',
+                                      value: '',
+                                    })
+                                  }
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold text-amber-700 dark:text-amber-300 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-900/60 border border-amber-300/80 dark:border-amber-700/60 rounded-md transition-colors cursor-pointer"
+                                  title="Definir apelido / nome de destaque (ex: ESPECÍFICA, SIMPLIFICADA)"
+                                >
+                                  <Tag className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                                  <span>+ Apelido</span>
+                                </button>
+                              )}
+                            </div>
 
                             <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                               {selectedCompanyId === 'all' && docCompany && (
@@ -3775,6 +3981,15 @@ export default function App() {
                 setSettingsInitialTab(tab);
                 setActiveSection('settings');
               }}
+              onSaveAttachmentDataUrl={saveAttachmentData}
+              onGetAttachmentDataUrl={getAttachmentData}
+              onDeleteAttachmentDataUrl={deleteAttachmentData}
+              onPreviewDoc={(title, dataUrl, mimeType, fileName) =>
+                setPreviewModal({
+                  doc: { name: title, fileName, fileMimeType: mimeType },
+                  dataUrl,
+                })
+              }
             />
           </section>
         )}
@@ -3921,6 +4136,26 @@ export default function App() {
                 </button>
               </div>
             </div>
+
+            {/* DOCUMENTOS BASE DA EMPRESA (CARTÃO CNPJ, CNH DO SÓCIO, CONTRATO SOCIAL) */}
+            <CompanyDocumentAttachmentManager
+              company={activeCompany}
+              onUpdateCompany={(updated) => {
+                setCompanies((prev) =>
+                  prev.map((c) => (c.id === activeCompany.id ? { ...c, ...updated } : c))
+                );
+                showToast('Ficha e documentos da empresa sincronizados!');
+              }}
+              onSaveAttachmentDataUrl={saveAttachmentData}
+              onGetAttachmentDataUrl={getAttachmentData}
+              onDeleteAttachmentDataUrl={deleteAttachmentData}
+              onPreviewDoc={(title, dataUrl, mimeType, fileName) =>
+                setPreviewModal({
+                  doc: { name: title, fileName, fileMimeType: mimeType },
+                  dataUrl,
+                })
+              }
+            />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
               {/* Bloco 1: Identificação Fiscal e Cadastral */}
@@ -4601,11 +4836,21 @@ export default function App() {
       ==================================================================== */}
       {companyModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs overflow-y-auto">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl max-w-xl w-full p-6 space-y-4 shadow-xl my-8">
-            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
-              <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                {companyModal.isNew ? 'Cadastrar Nova Empresa (Piauí)' : 'Editar Empresa'}
-              </h3>
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-3xl w-full p-6 space-y-4 shadow-2xl my-8 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3 shrink-0">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-lg">
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    {companyModal.isNew ? 'Cadastrar Nova Empresa (Piauí)' : 'Editar Cadastro da Empresa'}
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Anexe os documentos (CNPJ, CNH, Contrato) para preenchimento automático inteligente.
+                  </p>
+                </div>
+              </div>
               <button
                 type="button"
                 onClick={() => setCompanyModal(null)}
@@ -4615,133 +4860,374 @@ export default function App() {
               </button>
             </div>
 
-            <form onSubmit={handleSaveCompany} className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="sm:col-span-2">
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Razão Social *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={companyModal.profile.companyName}
-                    onChange={(e) =>
-                      setCompanyModal({
-                        ...companyModal,
-                        profile: { ...companyModal.profile, companyName: e.target.value },
-                      })
-                    }
-                    className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
-                  />
+            <form onSubmit={handleSaveCompany} className="space-y-4 overflow-y-auto pr-1 flex-1">
+              {/* Gerenciador de Anexos Base com Auto-Leitura de CNPJ e CNH */}
+              <CompanyDocumentAttachmentManager
+                company={companyModal.profile}
+                onUpdateCompany={(updated) =>
+                  setCompanyModal({
+                    ...companyModal,
+                    profile: { ...companyModal.profile, ...updated },
+                  })
+                }
+                onSaveAttachmentDataUrl={saveAttachmentData}
+                onGetAttachmentDataUrl={getAttachmentData}
+                onDeleteAttachmentDataUrl={deleteAttachmentData}
+                onPreviewDoc={(title, dataUrl, mimeType, fileName) =>
+                  setPreviewModal({
+                    doc: { name: title, fileName, fileMimeType: mimeType },
+                    dataUrl,
+                  })
+                }
+              />
+
+              {/* Seção 1: Dados Empresariais */}
+              <div className="p-3.5 bg-slate-50/60 dark:bg-slate-950/40 border border-slate-200/80 dark:border-slate-800/80 rounded-xl space-y-3">
+                <div className="text-xs font-bold uppercase tracking-wider text-blue-700 dark:text-blue-400">
+                  1. Dados Empresariais e Fiscais
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    CNPJ *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={companyModal.profile.cnpj}
-                    onChange={(e) =>
-                      setCompanyModal({
-                        ...companyModal,
-                        profile: { ...companyModal.profile, cnpj: e.target.value },
-                      })
-                    }
-                    className="w-full px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
-                  />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Razão Social Completa *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={companyModal.profile.companyName}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, companyName: e.target.value },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="Ex: Desinfecta Serviços Ltda"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Nome Fantasia
+                    </label>
+                    <input
+                      type="text"
+                      value={companyModal.profile.tradeName || ''}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, tradeName: e.target.value },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="Nome de Fachada / Fantasia"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      CNPJ *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={companyModal.profile.cnpj}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, cnpj: formatCNPJ(e.target.value) },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="00.000.000/0001-00"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Inscrição Estadual (SEFAZ-PI)
+                    </label>
+                    <input
+                      type="text"
+                      value={companyModal.profile.stateRegistration}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: {
+                            ...companyModal.profile,
+                            stateRegistration: e.target.value,
+                          },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="Ex: 19.456.789-0"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Inscrição Municipal (CMC Prefeitura)
+                    </label>
+                    <input
+                      type="text"
+                      value={companyModal.profile.municipalRegistration}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: {
+                            ...companyModal.profile,
+                            municipalRegistration: e.target.value,
+                          },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="Ex: 458920-1"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      NIRE (JUCEPI)
+                    </label>
+                    <input
+                      type="text"
+                      value={companyModal.profile.nire}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, nire: e.target.value },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="Ex: 22200123456"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      CNAE Principal
+                    </label>
+                    <input
+                      type="text"
+                      value={companyModal.profile.cnaeMain || ''}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, cnaeMain: e.target.value },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="Ex: 81.22-2-00"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Seção 2: Endereço e Contato */}
+              <div className="p-3.5 bg-slate-50/60 dark:bg-slate-950/40 border border-slate-200/80 dark:border-slate-800/80 rounded-xl space-y-3">
+                <div className="text-xs font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                  2. Endereço e Contato
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Inscrição Estadual (SEFAZ-PI)
-                  </label>
-                  <input
-                    type="text"
-                    value={companyModal.profile.stateRegistration}
-                    onChange={(e) =>
-                      setCompanyModal({
-                        ...companyModal,
-                        profile: {
-                          ...companyModal.profile,
-                          stateRegistration: e.target.value,
-                        },
-                      })
-                    }
-                    className="w-full px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
-                  />
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Endereço / Logradouro
+                    </label>
+                    <input
+                      type="text"
+                      value={companyModal.profile.address || ''}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, address: e.target.value },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="Rua, Avenida, Número"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Bairro
+                    </label>
+                    <input
+                      type="text"
+                      value={companyModal.profile.neighborhood || ''}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, neighborhood: e.target.value },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="Bairro"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      CEP
+                    </label>
+                    <input
+                      type="text"
+                      value={companyModal.profile.cep || ''}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, cep: e.target.value },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="64000-000"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Município / UF
+                    </label>
+                    <input
+                      type="text"
+                      value={companyModal.profile.cityState || ''}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, cityState: e.target.value },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="Teresina - PI"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Telefone / WhatsApp
+                    </label>
+                    <input
+                      type="text"
+                      value={companyModal.profile.phone || ''}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, phone: e.target.value },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="(86) 99999-0000"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-3">
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      E-mail para Emissão de Certidões
+                    </label>
+                    <input
+                      type="email"
+                      value={companyModal.profile.email}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, email: e.target.value },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="contato@empresa.com.br"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Seção 3: Sócio Administrador e CNH */}
+              <div className="p-3.5 bg-slate-50/60 dark:bg-slate-950/40 border border-slate-200/80 dark:border-slate-800/80 rounded-xl space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="text-xs font-bold uppercase tracking-wider text-purple-700 dark:text-purple-400 flex items-center gap-2">
+                    <span>3. Sócio Administrador & Representante Legal</span>
+                    <span className="px-1.5 py-0.5 text-[9px] font-extrabold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/90 dark:text-emerald-300 rounded border border-emerald-300 dark:border-emerald-700 uppercase">
+                      Prioridade: CNH do Sócio
+                    </span>
+                  </div>
+                  {companyModal.profile.companyDocuments?.some((d) => d.docType === 'cnh_socio') && (
+                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800">
+                      <CheckCircle2 className="w-3 h-3" /> CNH Oficial Vinculada
+                    </span>
+                  )}
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Inscrição Municipal (CMC Prefeitura)
-                  </label>
-                  <input
-                    type="text"
-                    value={companyModal.profile.municipalRegistration}
-                    onChange={(e) =>
-                      setCompanyModal({
-                        ...companyModal,
-                        profile: {
-                          ...companyModal.profile,
-                          municipalRegistration: e.target.value,
-                        },
-                      })
-                    }
-                    className="w-full px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
-                  />
-                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Nome Completo do Sócio Administrador
+                    </label>
+                    <input
+                      type="text"
+                      value={companyModal.profile.partnerName || ''}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, partnerName: e.target.value },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="Nome conforme CNH ou RG"
+                    />
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    NIRE (JUCEPI)
-                  </label>
-                  <input
-                    type="text"
-                    value={companyModal.profile.nire}
-                    onChange={(e) =>
-                      setCompanyModal({
-                        ...companyModal,
-                        profile: { ...companyModal.profile, nire: e.target.value },
-                      })
-                    }
-                    className="w-full px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
-                  />
-                </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      CPF do Sócio Administrador
+                    </label>
+                    <input
+                      type="text"
+                      value={companyModal.profile.partnerCpf}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, partnerCpf: formatCPF(e.target.value) },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="000.000.000-00"
+                    />
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    CPF do Sócio Administrador
-                  </label>
-                  <input
-                    type="text"
-                    value={companyModal.profile.partnerCpf}
-                    onChange={(e) =>
-                      setCompanyModal({
-                        ...companyModal,
-                        profile: { ...companyModal.profile, partnerCpf: e.target.value },
-                      })
-                    }
-                    className="w-full px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
-                  />
-                </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      RG do Sócio Administrador
+                    </label>
+                    <input
+                      type="text"
+                      value={companyModal.profile.partnerRg || ''}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, partnerRg: e.target.value },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="1.234.567 SSP-PI"
+                    />
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    E-mail para Certidões
-                  </label>
-                  <input
-                    type="email"
-                    value={companyModal.profile.email}
-                    onChange={(e) =>
-                      setCompanyModal({
-                        ...companyModal,
-                        profile: { ...companyModal.profile, email: e.target.value },
-                      })
-                    }
-                    className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
-                  />
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Data de Nascimento do Sócio
+                    </label>
+                    <input
+                      type="date"
+                      value={companyModal.profile.partnerBirthDate || ''}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, partnerBirthDate: e.target.value },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -5023,9 +5509,37 @@ export default function App() {
                   </select>
                 </div>
 
+                {/* Campo de Destaque / Apelido Rápido */}
+                <div className="sm:col-span-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                      <Tag className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                      Nome de Destaque / Apelido Rápido (Opcional)
+                    </label>
+                    <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+                      Ex: ESPECÍFICA, SIMPLIFICADA
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    value={editingDoc.highlightName || ''}
+                    onChange={(e) =>
+                      setEditingDoc({
+                        ...editingDoc,
+                        highlightName: e.target.value.toUpperCase(),
+                      })
+                    }
+                    placeholder="Ex: ESPECIFICA (deixe em branco se preferir usar apenas o nome oficial)"
+                    className="w-full px-3 py-2 text-sm font-bold uppercase tracking-wider bg-white dark:bg-slate-900 border border-amber-400 dark:border-amber-600 rounded-lg text-amber-950 dark:text-amber-100 placeholder:normal-case placeholder:font-normal placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  />
+                  <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                    💡 Quando preenchido, a certidão exibirá este nome em destaque e a <strong>ordem alfabética</strong> da lista será organizada por ele!
+                  </p>
+                </div>
+
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Nome da Certidão / Licença / Documento *
+                    Nome Oficial da Certidão / Licença / Documento *
                   </label>
                   <input
                     type="text"
@@ -5310,8 +5824,81 @@ export default function App() {
       )}
 
       {/* ====================================================================
-          MODAL: EXCLUIR APENAS PDF (COM ESCOLHA DEDICADA)
+          MODAL: CONFIRMAR EXCLUSÃO / ARQUIVAMENTO DE EMPRESA (DO PAINEL PRINCIPAL)
       ==================================================================== */}
+      {companyToDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-xs">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400 shrink-0">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Excluir ou Desativar Cadastro de Empresa?
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Empresa: <strong className="text-slate-800 dark:text-slate-200">{companyToDeleteConfirm.companyName}</strong> (CNPJ: {companyToDeleteConfirm.cnpj})
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-1.5 text-xs text-amber-900 dark:text-amber-200">
+              <div className="font-bold flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 text-amber-600" />
+                Impacto da Exclusão:
+              </div>
+              <p>
+                Esta empresa possui <strong>{documents.filter((d) => d.companyId === companyToDeleteConfirm.id).length} certidão(ões)</strong> cadastradas no sistema.
+              </p>
+            </div>
+
+            <div className="space-y-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  handleArchiveCompanyFromManagement(companyToDeleteConfirm.id, true);
+                  setCompanyToDeleteConfirm(null);
+                }}
+                className="w-full py-2.5 px-4 text-xs font-bold text-amber-800 dark:text-amber-200 bg-amber-100/80 hover:bg-amber-200/80 dark:bg-amber-950/60 dark:hover:bg-amber-900/60 rounded-xl border border-amber-300 dark:border-amber-800 transition cursor-pointer text-left flex items-center justify-between"
+              >
+                <div>
+                  <div className="font-bold">1. Arquivar Empresa (Recomendado)</div>
+                  <div className="text-[11px] font-normal text-amber-700/90 dark:text-amber-300/80">
+                    Oculta a empresa do seletor principal, preservando todas as certidões e histórico caso precise restaurá-la depois.
+                  </div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  handleDeleteCompanyFromManagement(companyToDeleteConfirm.id);
+                  setCompanyToDeleteConfirm(null);
+                }}
+                className="w-full py-2.5 px-4 text-xs font-bold text-rose-700 dark:text-rose-200 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/50 dark:hover:bg-rose-900/60 rounded-xl border border-rose-200 dark:border-rose-900 transition cursor-pointer text-left flex items-center justify-between"
+              >
+                <div>
+                  <div className="font-bold text-rose-600 dark:text-rose-400">2. Excluir Definitivamente</div>
+                  <div className="text-[11px] font-normal text-rose-700/80 dark:text-rose-300/80">
+                    Remove permanentemente o cadastro da empresa, certidões e anexos vinculados.
+                  </div>
+                </div>
+              </button>
+            </div>
+
+            <div className="flex items-center justify-end pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setCompanyToDeleteConfirm(null)}
+                className="px-4 py-2 text-xs font-medium text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 rounded-lg cursor-pointer hover:bg-slate-200"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <DeletePdfModal
         isOpen={Boolean(deletingPdfDoc)}
         doc={deletingPdfDoc}

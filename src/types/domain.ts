@@ -1,6 +1,6 @@
-import { AutoFillFieldKey, CompanyBasicProfile } from '../utils/portalAdapters';
+import { AutoFillFieldKey, CompanyBasicProfile, CompanyDocumentAttachment } from '../utils/portalAdapters';
 
-export type { CompanyBasicProfile };
+export type { CompanyBasicProfile, CompanyDocumentAttachment };
 
 export type DocumentCategory =
   | 'Fiscais e Trabalhistas'
@@ -22,6 +22,7 @@ export interface CertidaoDocument {
   companyId: string;
   templateKey?: string;
   name: string;
+  highlightName?: string; // Nome de destaque / apelido editável (ex: "ESPECÍFICA", "SIMPLIFICADA")
   category: DocumentCategory;
   issuer: string;
   emitterUrl: string;

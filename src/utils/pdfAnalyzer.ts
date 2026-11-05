@@ -111,20 +111,31 @@ export async function extractTextLocallyFromFile(
       return { text: cleaned, engine: 'pdfjs-local' };
     }
 
-    // Se o PDF for digitalizado (imagem escaneada sem camada de texto), renderiza a 1ª página e usa Tesseract OCR!
+    // Se o PDF for digitalizado (imagem escaneada sem camada de texto), renderiza as páginas (frente e verso) e usa Tesseract OCR!
     onProgress?.('PDF digitalizado detectado: executando OCR local com Tesseract.js...');
     try {
-      const page = await pdf.getPage(1);
-      const viewport = page.getViewport({ scale: 2.0 });
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        await page.render({ canvasContext: ctx, viewport, canvas }).promise;
-        const ocrResult = await Tesseract.recognize(canvas, 'por');
+      const ocrPagesText: string[] = [];
+      const ocrMax = Math.min(pdf.numPages, 3);
+      for (let p = 1; p <= ocrMax; p++) {
+        if (ocrMax > 1) {
+          onProgress?.(`Executando OCR na página ${p} de ${ocrMax}...`);
+        }
+        const page = await pdf.getPage(p);
+        const viewport = page.getViewport({ scale: 2.0 });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          await page.render({ canvasContext: ctx, viewport, canvas }).promise;
+          const ocrResult = await Tesseract.recognize(canvas, 'por');
+          const t = (ocrResult.data.text || '').trim();
+          if (t) ocrPagesText.push(t);
+        }
+      }
+      if (ocrPagesText.length > 0) {
         return {
-          text: (ocrResult.data.text || '').trim(),
+          text: ocrPagesText.join('\n\n--- PAGINA ---\n\n'),
           engine: 'tesseract-ocr',
         };
       }

@@ -20,6 +20,18 @@ export type AutoFillFieldKey =
   | 'tel'
   | 'cep';
 
+export interface CompanyDocumentAttachment {
+  id: string;
+  docType: 'cnpj' | 'cnh_socio' | 'rg_socio' | 'contrato_social' | 'ie_sefaz' | 'im_prefeitura' | 'outro';
+  title: string;
+  fileName: string;
+  fileMimeType: string;
+  fileSize: number;
+  uploadedAt: string;
+  notes?: string;
+  extractedSummary?: string;
+}
+
 export interface CompanyBasicProfile {
   id: string;
   companyName: string;
@@ -62,6 +74,7 @@ export interface CompanyBasicProfile {
   generalNotes?: string;
   adminNotes?: string;
   customFields?: Record<string, string>;
+  companyDocuments?: CompanyDocumentAttachment[];
   isArchived?: boolean;
   archivedAt?: string;
 }

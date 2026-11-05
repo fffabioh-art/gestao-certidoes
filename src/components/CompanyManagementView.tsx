@@ -22,11 +22,12 @@ import {
   Phone,
   Mail,
   MapPin,
-  Save
+  Save,
 } from 'lucide-react';
 import { CompanyProfile, CertidaoDocument, AppSettings } from '../types/domain';
 import { getEffectiveCompanyFields, getEffectiveCustomFields } from '../utils/settingsConfig';
-import { isValidCnpj, formatCnpj, formatPhone, formatCep } from '../utils/validators';
+import { isValidCnpj, formatCnpj, formatPhone, formatCep, formatCpf } from '../utils/validators';
+import { CompanyDocumentAttachmentManager } from './CompanyDocumentAttachmentManager';
 
 interface CompanyManagementViewProps {
   companies: CompanyProfile[];
@@ -38,6 +39,10 @@ interface CompanyManagementViewProps {
   onDeleteCompany: (companyId: string) => void;
   onArchiveCompany: (companyId: string, archive: boolean) => void;
   onOpenSettings: (initialTab?: string) => void;
+  onSaveAttachmentDataUrl?: (key: string, dataUrl: string) => Promise<void>;
+  onGetAttachmentDataUrl?: (key: string) => Promise<string | null>;
+  onDeleteAttachmentDataUrl?: (key: string) => Promise<void>;
+  onPreviewDoc?: (title: string, dataUrl: string, mimeType: string, fileName: string) => void;
 }
 
 export const CompanyManagementView: React.FC<CompanyManagementViewProps> = ({
@@ -50,6 +55,10 @@ export const CompanyManagementView: React.FC<CompanyManagementViewProps> = ({
   onDeleteCompany,
   onArchiveCompany,
   onOpenSettings,
+  onSaveAttachmentDataUrl = async () => {},
+  onGetAttachmentDataUrl = async () => null,
+  onDeleteAttachmentDataUrl = async () => {},
+  onPreviewDoc,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'archived'>('active');
@@ -403,6 +412,26 @@ export const CompanyManagementView: React.FC<CompanyManagementViewProps> = ({
                       <span>{metrics.noPdf} certidões sem arquivo PDF anexado</span>
                     </div>
                   )}
+
+                  {comp.companyDocuments && comp.companyDocuments.length > 0 && (
+                    <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex flex-wrap items-center gap-1.5">
+                      <span className="text-[10px] text-slate-500 font-medium">Docs Base:</span>
+                      {comp.companyDocuments.map((cd, i) => (
+                        <span
+                          key={cd.id || i}
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-800 text-slate-300 border border-slate-700/80"
+                        >
+                          {cd.docType === 'cnpj'
+                            ? '📄 Cartão CNPJ'
+                            : cd.docType === 'cnh_socio'
+                            ? '🪪 CNH Sócio'
+                            : cd.docType === 'contrato_social'
+                            ? '📑 Contrato Social'
+                            : '📎 ' + cd.title.slice(0, 14)}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Footer Action Buttons */}
@@ -503,6 +532,16 @@ export const CompanyManagementView: React.FC<CompanyManagementViewProps> = ({
             </div>
 
             <form onSubmit={handleSaveSubmit} className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* Gerenciador e Leitor Inteligente de Documentação da Empresa (CNPJ, CNH, Contrato Social) */}
+              <CompanyDocumentAttachmentManager
+                company={editingCompany as any}
+                onUpdateCompany={(updated) => setEditingCompany((prev) => ({ ...prev, ...updated }))}
+                onSaveAttachmentDataUrl={onSaveAttachmentDataUrl}
+                onGetAttachmentDataUrl={onGetAttachmentDataUrl}
+                onDeleteAttachmentDataUrl={onDeleteAttachmentDataUrl}
+                onPreviewDoc={onPreviewDoc}
+              />
+
               {/* Dynamic Sections Based on Configuration */}
               {(() => {
                 const effectiveFields = getEffectiveCompanyFields(settings, editingCompany.id);
@@ -524,9 +563,16 @@ export const CompanyManagementView: React.FC<CompanyManagementViewProps> = ({
 
                       return (
                         <div key={sec.id} className="p-4 rounded-xl bg-slate-950/40 border border-slate-800/80 space-y-4">
-                          <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
-                            {sec.label}
-                          </h4>
+                          <div className="flex items-center justify-between flex-wrap gap-2">
+                            <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
+                              {sec.label}
+                            </h4>
+                            {sec.id === 'partner' && (
+                              <span className="px-2 py-0.5 text-[10px] font-extrabold bg-emerald-950/80 text-emerald-300 rounded border border-emerald-700/60 uppercase">
+                                Prioridade: CNH do Sócio
+                              </span>
+                            )}
+                          </div>
 
                           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5">
                             {fieldsInSection.map((field) => {
@@ -564,6 +610,7 @@ export const CompanyManagementView: React.FC<CompanyManagementViewProps> = ({
                                       onChange={(e) => {
                                         let val = e.target.value;
                                         if (fieldKey === 'cnpj') val = formatCnpj(val);
+                                        else if (fieldKey === 'partnerCpf' || fieldKey === 'techResponsibleCpf' || fieldKey === 'representativeCpf') val = formatCpf(val);
                                         else if (fieldKey === 'phone' || fieldKey === 'whatsapp' || fieldKey === 'partnerPhone') val = formatPhone(val);
                                         else if (fieldKey === 'cep' || fieldKey === 'zipCode') val = formatCep(val);
 
