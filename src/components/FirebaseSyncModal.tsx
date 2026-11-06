@@ -42,8 +42,12 @@ export const FirebaseSyncModal: React.FC<FirebaseSyncModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-850">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400">
-              <Cloud className="w-6 h-6" />
+            <div className="p-1.5 rounded-xl bg-purple-500/10 border border-purple-500/20 shrink-0">
+              <img
+                src="/assets/aistudio/Wizard_Hat_and_Spellbook_Stack_8d8be742.png"
+                alt="Mago das Licitações"
+                className="w-7 h-7 object-contain drop-shadow"
+              />
             </div>
             <div>
               <h3 className="text-lg font-bold text-white flex items-center gap-2">

@@ -335,9 +335,13 @@ export const SettingsCenterView: React.FC<SettingsCenterViewProps> = ({
       {/* HEADER BANNER */}
       <div className="p-6 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2.5">
-            <Settings className="w-6 h-6 text-blue-600 dark:text-blue-400" />
-            Central de Configurações do Sistema
+          <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-3">
+            <img
+              src="/assets/aistudio/Wizard_Hat_and_Spellbook_Stack_8d8be742.png"
+              alt="Mago das Licitações"
+              className="w-8 h-8 object-contain shrink-0"
+            />
+            <span>Central de Configurações do Sistema</span>
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-2xl leading-relaxed">
             Personalize quais campos aparecem no cadastro de empresas e certidões, crie campos personalizados, configure as colunas da tabela, ajuste modelos de documentos e gerencie alertas sem alterar código.
@@ -1505,8 +1509,12 @@ export const SettingsCenterView: React.FC<SettingsCenterViewProps> = ({
           <div className="p-6 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 space-y-5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex items-center gap-3.5">
-                <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400">
-                  <Cloud className="w-6 h-6" />
+                <div className="p-2 rounded-xl bg-purple-500/10 border border-purple-500/20 shrink-0">
+                  <img
+                    src="/assets/aistudio/Wizard_Hat_and_Spellbook_Stack_8d8be742.png"
+                    alt="Mago das Licitações"
+                    className="w-8 h-8 object-contain"
+                  />
                 </div>
                 <div>
                   <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">

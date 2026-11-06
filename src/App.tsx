@@ -2742,9 +2742,14 @@ export default function App() {
             e.preventDefault();
             setActiveSection('dashboard');
           }}
-          className="text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0"
+          className="text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0 flex items-center gap-2.5 group"
         >
-          Mago das Licitações
+          <img
+            src="/assets/aistudio/Wizard_Hat_and_Spellbook_Stack_8d8be742.png"
+            alt="Mago das Licitações"
+            className="w-8 h-8 object-contain rounded-lg drop-shadow-sm group-hover:scale-110 transition-transform duration-200"
+          />
+          <span>Mago das Licitações</span>
         </a>
 
         <nav className="hidden lg:flex items-center gap-1.5 text-xs font-semibold">
@@ -6335,10 +6340,17 @@ export default function App() {
       )}
 
       <footer className="mt-auto border-t border-slate-200 dark:border-slate-800 py-4 px-6 text-xs text-slate-500 dark:text-slate-400">
-        <div className="max-w-[1440px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>
-            Mago das Licitações — Emissão Assistida, Leitura Gratuita de PDFs (PDF.js + OCR), Lote e Histórico (Piauí)
-          </span>
+        <div className="max-w-[1440px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <img
+              src="/assets/aistudio/Wizard_Hat_and_Spellbook_Stack_8d8be742.png"
+              alt="Mago das Licitações"
+              className="w-5 h-5 object-contain shrink-0"
+            />
+            <span>
+              Mago das Licitações — Emissão Assistida, Leitura Gratuita de PDFs (PDF.js + OCR), Lote e Histórico (Piauí)
+            </span>
+          </div>
           <span>Banco de dados local sincronizado automaticamente</span>
         </div>
       </footer>
