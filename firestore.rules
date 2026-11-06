@@ -1,0 +1,48 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Bloqueio padrão para todas as coleções não declaradas explicitamente
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    // Regras isoladas por UID do usuário: cada licitante acessa estritamente seus próprios registros
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+
+      // Empresas cadastradas
+      match /companies/{companyId} {
+        allow read, write: if isOwner(userId) && isValidId(companyId);
+      }
+
+      // Metadados de certidões e prazos
+      match /documents/{documentId} {
+        allow read, write: if isOwner(userId) && isValidId(documentId);
+      }
+
+      // Histórico de emissões e registros
+      match /history/{historyId} {
+        allow read, write: if isOwner(userId) && isValidId(historyId);
+      }
+
+      // Configurações personalizadas
+      match /settings/{settingId} {
+        allow read, write: if isOwner(userId) && isValidId(settingId);
+      }
+    }
+  }
+}

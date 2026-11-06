@@ -1,0 +1,142 @@
+{
+  "entities": {
+    "Company": {
+      "title": "Company",
+      "description": "Dados cadastrais e societários da empresa licitante",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identificador único da empresa"
+        },
+        "cnpj": {
+          "type": "string",
+          "description": "CNPJ com ou sem máscara"
+        },
+        "companyName": {
+          "type": "string",
+          "description": "Razão social"
+        },
+        "tradeName": {
+          "type": "string",
+          "description": "Nome fantasia"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Data ISO da última atualização"
+        }
+      },
+      "required": ["id", "cnpj", "companyName"]
+    },
+    "CompanyDocument": {
+      "title": "CompanyDocument",
+      "description": "Metadados de certidões e prazos de validade",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identificador da certidão"
+        },
+        "companyId": {
+          "type": "string",
+          "description": "ID da empresa associada"
+        },
+        "templateKey": {
+          "type": "string",
+          "description": "Código do modelo de certidão"
+        },
+        "documentName": {
+          "type": "string",
+          "description": "Nome da certidão"
+        },
+        "expirationDate": {
+          "type": "string",
+          "description": "Data de validade"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Data ISO da última atualização"
+        }
+      },
+      "required": ["id", "companyId", "documentName"]
+    },
+    "DocumentHistory": {
+      "title": "DocumentHistory",
+      "description": "Histórico de emissão e atualizações de certidões",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID do evento"
+        },
+        "companyId": {
+          "type": "string",
+          "description": "ID da empresa"
+        },
+        "documentName": {
+          "type": "string",
+          "description": "Nome do documento"
+        },
+        "action": {
+          "type": "string",
+          "description": "Ação executada"
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "Timestamp ISO da ação"
+        }
+      },
+      "required": ["id", "companyId", "action", "timestamp"]
+    },
+    "UserSettings": {
+      "title": "UserSettings",
+      "description": "Configurações e preferências de visualização do usuário",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID da configuração"
+        },
+        "activeCompanyId": {
+          "type": "string",
+          "description": "ID da empresa selecionada"
+        },
+        "warningThresholdDays": {
+          "type": "number",
+          "description": "Dias de antecedência para alerta de vencimento"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Data ISO da última atualização"
+        }
+      },
+      "required": ["id"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/companies/{companyId}": {
+      "schema": {
+        "$ref": "#/entities/Company"
+      },
+      "description": "Empresas cadastradas pertencentes ao usuário autenticado"
+    },
+    "/users/{userId}/documents/{documentId}": {
+      "schema": {
+        "$ref": "#/entities/CompanyDocument"
+      },
+      "description": "Metadados de certidões e validades pertencentes ao usuário autenticado"
+    },
+    "/users/{userId}/history/{historyId}": {
+      "schema": {
+        "$ref": "#/entities/DocumentHistory"
+      },
+      "description": "Histórico de ações e emissões pertencente ao usuário autenticado"
+    },
+    "/users/{userId}/settings/{settingId}": {
+      "schema": {
+        "$ref": "#/entities/UserSettings"
+      },
+      "description": "Preferências e configurações do usuário autenticado"
+    }
+  }
+}

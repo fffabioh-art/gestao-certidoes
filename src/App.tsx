@@ -46,7 +46,13 @@ import {
   Tag,
   ChevronDown,
   Edit2,
+  Cloud,
+  CloudOff,
+  LogIn,
+  LogOut,
+  HardDrive,
 } from 'lucide-react';
+import type { User } from 'firebase/auth';
 import {
   CertidaoDocument,
   CompanyFieldDiff,
@@ -86,6 +92,19 @@ import { CompanyManagementView } from './components/CompanyManagementView';
 import { DeletePdfModal } from './components/DeletePdfModal';
 import { PdfViewerModal } from './components/PdfViewerModal';
 import { CompanyDocumentAttachmentManager } from './components/CompanyDocumentAttachmentManager';
+import { FirebaseSyncModal } from './components/FirebaseSyncModal';
+import {
+  signInWithGoogle,
+  signOutUser,
+  onAuthChange,
+  fetchCloudUserData,
+  generateSyncPreview,
+  applySync,
+  isOnline,
+  subscribeNetworkStatus,
+  SyncPreview,
+  LocalAppData,
+} from './utils/firebase';
 import {
   mergeWithDefaultSettings,
   buildDefaultAppSettings,
@@ -1127,6 +1146,128 @@ export default function App() {
     setTimeout(() => {
       setToastMessage((prev) => (prev === msg ? null : prev));
     }, 4500);
+  };
+
+  // ============================================================================
+  // FIREBASE AUTH & CLOUD FIRESTORE SYNC
+  // ============================================================================
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState<boolean>(false);
+  const [isOnlineState, setIsOnlineState] = useState<boolean>(() => isOnline());
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(false);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [syncPreview, setSyncPreview] = useState<SyncPreview | null>(null);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(() => {
+    return localStorage.getItem('mago_last_sync_time');
+  });
+
+  useEffect(() => {
+    const unsub = onAuthChange((user) => {
+      setCurrentUser(user);
+      setIsAuthReady(true);
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = subscribeNetworkStatus((online) => {
+      setIsOnlineState(online);
+      if (!online) {
+        showToast('Você está em modo offline. As modificações continuarão sendo salvas localmente.');
+      } else {
+        showToast('Conexão com a internet restabelecida.');
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  const handleGoogleLogin = async () => {
+    const { user, error } = await signInWithGoogle();
+    if (error) {
+      showToast(error);
+      return;
+    }
+    if (user) {
+      showToast(`Bem-vindo, ${user.displayName || user.email}!`);
+      // Exigência 3: Primeira sincronização com prévia e confirmação
+      handleOpenSyncModal(user);
+    }
+  };
+
+  const handleGoogleLogout = async () => {
+    await signOutUser();
+    setCurrentUser(null);
+    showToast('Você saiu da sua conta Google. Seus dados locais permanecem salvos.');
+  };
+
+  const handleOpenSyncModal = async (overrideUser?: User | null) => {
+    const targetUser = overrideUser || currentUser;
+    if (!targetUser) {
+      await handleGoogleLogin();
+      return;
+    }
+    if (!isOnlineState) {
+      showToast('Você está offline. Conecte-se à internet para sincronizar com o Firestore.');
+      return;
+    }
+
+    try {
+      setIsSyncing(true);
+      const cloudData = await fetchCloudUserData(targetUser.uid);
+      const localData: LocalAppData = {
+        companies,
+        documents,
+        history: documentHistory,
+        settings,
+        activeCompanyId: selectedCompanyId,
+        warningThresholdDays: settings.globalWarningDays,
+      };
+      const preview = generateSyncPreview(localData, cloudData);
+      setSyncPreview(preview);
+      setIsSyncModalOpen(true);
+    } catch (err: any) {
+      console.error('Falha ao consultar dados do Cloud Firestore:', err);
+      showToast('Não foi possível obter dados da nuvem. Verifique sua conexão.');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleConfirmSync = async () => {
+    if (!currentUser || !syncPreview) return;
+    setIsSyncing(true);
+    try {
+      const cloudData = await fetchCloudUserData(currentUser.uid);
+      const localData: LocalAppData = {
+        companies,
+        documents,
+        history: documentHistory,
+        settings,
+        activeCompanyId: selectedCompanyId,
+        warningThresholdDays: settings.globalWarningDays,
+      };
+      const res = await applySync(currentUser.uid, localData, cloudData, syncPreview);
+      if (res.success) {
+        setCompanies(res.mergedData.companies);
+        setDocuments(res.mergedData.documents);
+        setDocumentHistory(res.mergedData.history);
+        if (res.mergedData.settings) {
+          setSettings(res.mergedData.settings);
+        }
+        const nowStr = new Date().toLocaleString('pt-BR');
+        setLastSyncTime(nowStr);
+        localStorage.setItem('mago_last_sync_time', nowStr);
+        setIsSyncModalOpen(false);
+        showToast('Sincronização com o Cloud Firestore concluída com sucesso!');
+      } else {
+        showToast(res.error || 'Erro durante a sincronização com o Firestore.');
+      }
+    } catch (err: any) {
+      console.error('Erro na sincronização:', err);
+      showToast('Falha na sincronização.');
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   // Active Emission Assistant Drawer
@@ -2759,6 +2900,93 @@ export default function App() {
             <Plus className="w-3.5 h-3.5" />
             Nova Certidão
           </button>
+
+          {/* GOOGLE AUTH & CLOUD SYNC WIDGET */}
+          {!currentUser ? (
+            <button
+              type="button"
+              onClick={handleGoogleLogin}
+              disabled={!isAuthReady}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-300 dark:border-slate-700 rounded-lg transition-colors cursor-pointer shadow-xs shrink-0"
+              title="Conectar com o Google para sincronizar com o Cloud Firestore"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+              </svg>
+              <span className="hidden sm:inline">Entrar com Google</span>
+              <span className="text-[10px] px-1 rounded bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400 font-medium">
+                Local
+              </span>
+            </button>
+          ) : (
+            <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800/90 border border-slate-300 dark:border-slate-700 rounded-lg p-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => handleOpenSyncModal()}
+                disabled={isSyncing}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+                  !isOnlineState
+                    ? 'bg-amber-500/10 text-amber-500 hover:bg-amber-500/20'
+                    : isSyncing
+                    ? 'bg-blue-500/10 text-blue-500'
+                    : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20'
+                }`}
+                title={
+                  !isOnlineState
+                    ? 'Modo Offline: Suas alterações estão salvas localmente.'
+                    : 'Conectado ao Cloud Firestore. Clique para revisar ou sincronizar agora.'
+                }
+              >
+                {!isOnlineState ? (
+                  <>
+                    <CloudOff className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Offline</span>
+                  </>
+                ) : isSyncing ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span className="hidden sm:inline">Sincronizando...</span>
+                  </>
+                ) : (
+                  <>
+                    <Cloud className="w-3.5 h-3.5 text-emerald-500" />
+                    <span className="hidden sm:inline">Nuvem</span>
+                  </>
+                )}
+              </button>
+              <div className="flex items-center gap-1.5 pl-1.5 pr-1 border-l border-slate-300 dark:border-slate-700">
+                {currentUser.photoURL ? (
+                  <img
+                    src={currentUser.photoURL}
+                    alt={currentUser.displayName || 'Google User'}
+                    className="w-5 h-5 rounded-full object-cover"
+                  />
+                ) : (
+                  <div className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center text-[10px] font-bold">
+                    {currentUser.displayName ? currentUser.displayName[0].toUpperCase() : 'U'}
+                  </div>
+                )}
+                <span
+                  className="text-xs font-medium text-slate-700 dark:text-slate-200 max-w-[85px] truncate hidden md:inline"
+                  title={currentUser.email || ''}
+                >
+                  {currentUser.displayName?.split(' ')[0] || currentUser.email?.split('@')[0]}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleGoogleLogout}
+                  className="p-1 text-slate-400 hover:text-red-500 rounded transition-colors cursor-pointer"
+                  title="Desconectar do Google (dados locais permanecem)"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
+
           <button
             type="button"
             onClick={() => setDarkMode(!darkMode)}
@@ -4035,6 +4263,12 @@ export default function App() {
               }}
               onClose={() => setActiveSection('dashboard')}
               initialTab={settingsInitialTab as any}
+              user={currentUser}
+              onOpenSyncModal={handleOpenSyncModal}
+              onLoginGoogle={handleGoogleLogin}
+              onLogoutGoogle={handleGoogleLogout}
+              isOnline={isOnlineState}
+              lastSyncTime={lastSyncTime}
             />
           </section>
         )}
@@ -6078,6 +6312,18 @@ export default function App() {
           setViewingPdfDoc(null);
           setDeletingPdfDoc(doc);
         }}
+      />
+
+      {/* ====================================================================
+          MODAL: SINCRONIZAÇÃO EM NUVEM FIREBASE (PRÉVIA + CONFLITOS)
+      ==================================================================== */}
+      <FirebaseSyncModal
+        isOpen={isSyncModalOpen}
+        onClose={() => setIsSyncModalOpen(false)}
+        user={currentUser}
+        preview={syncPreview}
+        isSyncing={isSyncing}
+        onConfirmSync={handleConfirmSync}
       />
 
       {/* FLOATING TOAST */}

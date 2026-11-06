@@ -90,6 +90,8 @@ export interface CompanyBasicProfile {
   companyDocuments?: CompanyDocumentAttachment[];
   isArchived?: boolean;
   archivedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface PortalAdapterConfig {
