@@ -535,6 +535,7 @@ export const CompanyManagementView: React.FC<CompanyManagementViewProps> = ({
               {/* Gerenciador e Leitor Inteligente de Documentação da Empresa (CNPJ, CNH, Contrato Social) */}
               <CompanyDocumentAttachmentManager
                 company={editingCompany as any}
+                companies={companies}
                 onUpdateCompany={(updated) => setEditingCompany((prev) => ({ ...prev, ...updated }))}
                 onSaveAttachmentDataUrl={onSaveAttachmentDataUrl}
                 onGetAttachmentDataUrl={onGetAttachmentDataUrl}

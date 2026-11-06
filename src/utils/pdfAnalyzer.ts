@@ -1,5 +1,4 @@
 import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import Tesseract from 'tesseract.js';
 import {
   onlyDigits,
@@ -12,8 +11,17 @@ import {
 } from './validators';
 import { CompanyBasicProfile } from './portalAdapters';
 
-// Configure PDF.js worker locally
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+// Configure PDF.js worker
+if (typeof window !== 'undefined') {
+  try {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+      'pdfjs-dist/build/pdf.worker.min.mjs',
+      import.meta.url
+    ).toString();
+  } catch {
+    // fallback if worker URL cannot be resolved
+  }
+}
 
 export type DocumentCategoryType =
   | 'Fiscais e Trabalhistas'

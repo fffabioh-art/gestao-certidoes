@@ -20,20 +20,55 @@ export type CompanyDocType =
   | 'im_prefeitura'
   | 'outro';
 
+export type FieldConfidence = 'alta' | 'media' | 'baixa';
+
+export interface CompanyDocFieldItem {
+  key: string;
+  label: string;
+  group: 'identificacao' | 'atividades' | 'endereco' | 'contato' | 'cnh_dados';
+  extractedValue: string;
+  currentValue: string;
+  confidence: FieldConfidence;
+  confidenceReason?: string;
+  accepted: boolean;
+  isDivergent: boolean;
+  isValid?: boolean;
+}
+
+export interface CnpjCardExtractionResult {
+  detected: boolean;
+  fields: Partial<CompanyBasicProfile>;
+  confidences: Record<string, FieldConfidence>;
+  secondaryCnaes: Array<{ code: string; description: string }>;
+  populatedLabels: string[];
+  rawText: string;
+}
+
+export interface CnhExtractionResult {
+  detected: boolean;
+  fields: Partial<CompanyBasicProfile>;
+  confidences: Record<string, FieldConfidence>;
+  populatedLabels: string[];
+  rawText: string;
+}
+
 export interface CompanyDocReadResult {
   detectedType: CompanyDocType;
   detectedTitle: string;
   extractedFields: Partial<CompanyBasicProfile>;
+  fieldItems: CompanyDocFieldItem[];
   populatedFieldLabels: string[];
   summary: string;
   rawTextSample: string;
   isCnhPartnerPriority?: boolean;
+  cnpjDivergenceWithCurrent?: boolean;
+  cnhDivergenceWithCurrent?: boolean;
 }
 
 /**
  * Normaliza quebras de linha e múltiplos espaços para busca confiável
  */
-function cleanText(text: string): string {
+export function cleanText(text: string): string {
   return text
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
@@ -52,7 +87,6 @@ export function findBestCPF(text: string, excludeCnpjDigits?: string): string | 
   const excludePrefix = excludeCnpjDigits ? onlyDigits(excludeCnpjDigits) : '';
 
   // 1. Busca por rótulos explícitos (CPF, C.P.F., CADASTRO DE PESSOAS FÍSICAS)
-  // Suporta mesmo na mesma linha ou na linha seguinte
   const labeledRegex =
     /(?:(?:^|\n|[\s,;])(?:C\.?\s*P\.?\s*F\.?|CADASTRO\s+DE\s+PESSOAS?\s+F[IÍ]SICAS?)\s*[:\-º°]?\s*(?:\n\s*)?)([0-9\.\-\s]{11,20})/gi;
   let match: RegExpExecArray | null;
@@ -70,7 +104,7 @@ export function findBestCPF(text: string, excludeCnpjDigits?: string): string | 
   const ocrNoiseLabeledRegex =
     /(?:(?:^|\n|[\s,;])(?:C\.?\s*P\.?\s*F\.?)\s*[:\-º°]?\s*(?:\n\s*)?)([0-9A-Za-z\.\-\s]{11,22})/gi;
   while ((match = ocrNoiseLabeledRegex.exec(text)) !== null) {
-    let candidate = match[1]
+    const candidate = match[1]
       .replace(/[Oo]/g, '0')
       .replace(/[Il|]/g, '1')
       .replace(/[B]/g, '8')
@@ -114,7 +148,7 @@ export function findBestCPF(text: string, excludeCnpjDigits?: string): string | 
 export function findBestCNPJ(text: string): string | null {
   if (!text) return null;
 
-  // Formatado
+  // Formatado oficial
   const fmtMatch = text.match(/\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b/);
   if (fmtMatch && isValidCNPJ(fmtMatch[0])) {
     return fmtMatch[0];
@@ -174,11 +208,13 @@ const STOP_WORDS_NAME = [
   'ESTADO',
   'TRANSITO',
   'DIGITAL',
+  'MINISTRO',
+  'DIRETOR',
 ];
 
 function sanitizeCandidateName(str: string): string | null {
   if (!str) return null;
-  let clean = str
+  const clean = str
     .replace(/[0-9.:,;!?"'#$*()_+=/\\[\]{}<>]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -190,7 +226,7 @@ function sanitizeCandidateName(str: string): string | null {
     .toUpperCase();
 
   const words = unaccented.split(' ').filter((w) => w.length > 1);
-  if (words.length < 2) return null; // nome tem que ter pelo menos 2 palavras (Nome e Sobrenome)
+  if (words.length < 2) return null; // nome deve ter pelo menos 2 palavras
 
   // Verifica se não é cabeçalho governamental
   const matchedStopWords = words.filter((w) => STOP_WORDS_NAME.includes(w));
@@ -199,157 +235,271 @@ function sanitizeCandidateName(str: string): string | null {
   // Tamanho razoável
   if (clean.length < 5 || clean.length > 70) return null;
 
-  // Caixa alta adequada ou capitalizada
   return clean.toUpperCase();
 }
 
 /**
- * Localiza o Nome do Sócio / Condutor / Administrador
+ * ============================================================================
+ * EXTRATOR ESPECIALIZADO 1: CARTÃO CNPJ (RECEITA FEDERAL DO BRASIL)
+ * ============================================================================
  */
-export function findPartnerName(text: string, docHint?: CompanyDocType): string | null {
-  if (!text) return null;
-
-  // 1. Em CNH / RG: Busca campo "NOME" ou "CONDUTOR" na mesma linha ou linha seguinte
-  const cnhNamePatterns = [
-    /(?:(?:^|\n|\s)(?:1\.\s*)?NOME(?:\s+DO\s+CONDUTOR|\s+COMPLETO)?\s*[:\-]?\s*)([A-ZÀ-Úa-zà-ú\s]{5,70})(?=\n|\r|DOC|FILIA|IDENTIDADE|CPF|DATA|$)/i,
-    /(?:(?:^|\n)\s*(?:1\.\s*)?NOME\s*[:\-]?\s*\n\s*)([A-ZÀ-Úa-zà-ú\s]{5,70})(?=\n|\r|DOC|FILIA|IDENTIDADE|CPF|DATA|$)/i,
-    /(?:(?:CONDUTOR|TITULAR)\s*[:\-]?\s*)([A-ZÀ-Úa-zà-ú\s]{5,70})(?=\n|\r|DOC|FILIA|IDENTIDADE|CPF|DATA|$)/i,
-  ];
-
-  for (const regex of cnhNamePatterns) {
-    const match = text.match(regex);
-    if (match && match[1]) {
-      const candidate = sanitizeCandidateName(match[1]);
-      if (candidate) return candidate;
-    }
-  }
-
-  // 2. Em Contrato Social / Alteração Contratual / JUCEPI
-  const legalPreambleRegex =
-    /\b([A-ZÀ-Ú][A-ZÀ-Úa-zà-ú\s]{4,55}),\s*(?:brasileir[oa]|solteir[oa]|casad[oa]|divorciad[oa]|empresári[oa]|administrador[a]?|residente|domiciliad[oa]|portador)/i;
-  const preambleMatch = text.match(legalPreambleRegex);
-  if (preambleMatch && preambleMatch[1]) {
-    const candidate = sanitizeCandidateName(preambleMatch[1]);
-    if (candidate) return candidate;
-  }
-
-  const socioAdminRegex =
-    /(?:(?:S[OÓ]CIO[- ]*ADMINISTRADOR|ADMINISTRADOR|ADMINISTRA[CÇ][AÃ]O|REPRESENTANTE\s+LEGAL)\s*[:\-]?\s*(?:\n\s*)?)([A-ZÀ-Úa-zà-ú\s]{5,60})/i;
-  const socioMatch = text.match(socioAdminRegex);
-  if (socioMatch && socioMatch[1]) {
-    const candidate = sanitizeCandidateName(socioMatch[1]);
-    if (candidate) return candidate;
-  }
-
-  // 3. Fallback inteligente quando for CNH ou RG:
-  // Procura linha antes de "DOC. IDENTIDADE" ou "FILIAÇÃO" ou "DATA NASCIMENTO"
-  if (docHint === 'cnh_socio' || docHint === 'rg_socio' || /HABILITA|DETRAN|CONDUTOR/i.test(text)) {
-    const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (/^(?:1\.\s*)?NOME/i.test(line)) {
-        // Se a própria linha tem o nome após NOME
-        const rest = line.replace(/^(?:1\.\s*)?NOME\s*[:\-]?\s*/i, '').trim();
-        const cand = sanitizeCandidateName(rest);
-        if (cand) return cand;
-
-        // Se o nome estiver na linha de baixo
-        if (i + 1 < lines.length) {
-          const nextCand = sanitizeCandidateName(lines[i + 1]);
-          if (nextCand) return nextCand;
-        }
-      }
-    }
-  }
-
-  return null;
-}
-
-/**
- * Localiza RG do Sócio Administrador
- */
-export function findPartnerRG(text: string): string | null {
-  if (!text) return null;
-
-  const rgMatch = text.match(
-    /(?:(?:DOC\.?\s*(?:DE\s*)?IDENTIDADE|RG|R\.G\.|REGISTRO\s+GERAL|IDENTIDADE|C[EÉ]DULA\s+DE\s+IDENTIDADE)\s*[:\-º°]?\s*(?:\n\s*)?)([0-9A-Za-z\.\-\/\s]{4,25})/i
-  );
-  if (rgMatch && rgMatch[1]) {
-    let clean = rgMatch[1].trim().replace(/\s+(?:ORG|EMISSOR|UF|DATA|VIA|ASSINATURA).*$/i, '');
-    if (clean.length >= 4) {
-      if (!/SSP|DETRAN|PC|DIC/i.test(clean) && /PI\b|PIAUI|TERESINA/i.test(text)) {
-        clean = `${clean} SSP-PI`;
-      }
-      return clean;
-    }
-  }
-
-  // Padrão numérico isolado de RG comum no Piauí (6 a 8 dígitos)
-  const numRg = text.match(/\b\d{1,2}\.?\d{3}\.?\d{3}[- ]?[0-9Xx]?\s+(?:SSP[- /]?PI|PC[- /]?PI)\b/i);
-  if (numRg) {
-    return numRg[0].trim();
-  }
-
-  return null;
-}
-
-/**
- * Localiza Data de Nascimento do Sócio
- */
-export function findPartnerBirthDate(text: string): string | null {
-  if (!text) return null;
-
-  const birthMatch = text.match(
-    /(?:(?:DATA\s+(?:DE\s+)?NASCIMENTO|NASC(?:IMENTO|\.)?|DT\.?\s*NASC\.?)\s*[:\-]?\s*(?:\n\s*)?)(\d{1,2}[/.-]\d{1,2}[/.-]\d{4})/i
-  );
-  if (birthMatch) {
-    const iso = parseBrDateToISO(birthMatch[1]);
-    if (iso) {
-      const year = parseInt(iso.substring(0, 4), 10);
-      if (year >= 1920 && year <= 2012) {
-        return iso;
-      }
-    }
-  }
-
-  return null;
-}
-
-/**
- * Lê e analisa documentos cadastrais da empresa (Cartão CNPJ, CNH, Contrato Social, etc.)
- * e extrai automaticamente os dados para pré-preenchimento.
- */
-export async function readCompanyDocument(
-  file: File,
-  onProgress?: (msg: string) => void,
-  hintDocType?: CompanyDocType
-): Promise<CompanyDocReadResult> {
-  onProgress?.('Extraindo texto do documento com PDF.js / OCR...');
-  const { text } = await extractTextLocallyFromFile(file, onProgress);
+export function extractCnpjCardData(text: string): CnpjCardExtractionResult {
   const normText = cleanText(text);
-
-  const extracted: Partial<CompanyBasicProfile> = {};
+  const fields: Partial<CompanyBasicProfile> = {};
+  const confidences: Record<string, FieldConfidence> = {};
   const populatedLabels: string[] = [];
-  let detectedType: CompanyDocType = hintDocType || 'outro';
-  let detectedTitle = 'Documento da Empresa';
+  const secondaryCnaes: Array<{ code: string; description: string }> = [];
 
-  const fileNameLower = file.name.toLowerCase();
-
-  // --------------------------------------------------------------------------
-  // IDENTIFICAÇÃO DO TIPO DE DOCUMENTO
-  // --------------------------------------------------------------------------
-  const isCartaoCnpj =
-    hintDocType === 'cnpj' ||
-    fileNameLower.includes('cnpj') ||
-    fileNameLower.includes('comprovante') ||
+  const isCartao =
     /COMPROVANTE\s+DE\s+INSCRI[CÇ][AÃ]O\s+E\s+DE\s+SITUA[CÇ][AÃ]O\s+CADASTRAL/i.test(normText) ||
     (/CADASTRO\s+NACIONAL\s+DA\s+PESSOA\s+JUR[IÍ]DICA/i.test(normText) && /RECEITA\s+FEDERAL/i.test(normText));
 
+  // 1. CNPJ
+  const cnpj = findBestCNPJ(normText);
+  if (cnpj) {
+    fields.cnpj = cnpj;
+    confidences.cnpj = 'alta';
+    populatedLabels.push('CNPJ');
+  }
+
+  // 2. Data de Abertura (NÃO confundir com emissão do comprovante nem situação cadastral!)
+  const aberturaMatch = normText.match(
+    /DATA\s+DE\s+ABERTURA\s*[:\-]?\s*(\d{1,2}[/.-]\d{1,2}[/.-]\d{4})/i
+  );
+  if (aberturaMatch) {
+    const iso = parseBrDateToISO(aberturaMatch[1]);
+    if (iso) {
+      fields.openingDate = iso;
+      confidences.openingDate = 'alta';
+      populatedLabels.push('Data de Abertura');
+    }
+  }
+
+  // 3. Razão Social (Nome Empresarial)
+  const razaoMatch = normText.match(
+    /(?:NOME\s+EMPRESARIAL|RAZ[AÃ]O\s+SOCIAL)\s*[:\-]?\s*([A-ZÀ-Ú0-9][A-ZÀ-Ú0-9 .,&/\-]{3,80}?)(?=\n|T[IÍ]TULO|NOME\s+FANTASIA|PORTE|CÓDIGO|DATA|$)/i
+  );
+  if (razaoMatch && razaoMatch[1]) {
+    const r = razaoMatch[1].trim();
+    if (!/REP[UÚ]BLICA|MINIST[EÉ]RIO|CADASTRO/i.test(r)) {
+      fields.companyName = r;
+      confidences.companyName = 'alta';
+      populatedLabels.push('Razão Social');
+    }
+  }
+
+  // 4. Nome Fantasia (Título do Estabelecimento)
+  // Regra Obrigatória: Se tiver ***** ou vazio, NUNCA salvar ***** como nome fantasia!
+  const fantasiaMatch = normText.match(
+    /(?:T[IÍ]TULO\s+DO\s+ESTABELECIMENTO\s*\(NOME\s+DE\s+FANTASIA\)|NOME\s+FANTASIA)\s*[:\-]?\s*([^\n]{2,70}?)(?=\n|PORTE|CÓDIGO|ATIVIDADE|CNPJ|$)/i
+  );
+  if (fantasiaMatch && fantasiaMatch[1]) {
+    const rawFantasia = fantasiaMatch[1].trim();
+    if (
+      !/^\*+$/.test(rawFantasia) &&
+      !/n[aã]o\s+informado/i.test(rawFantasia) &&
+      !/t[ií]tulo\s+do\s+estabelecimento/i.test(rawFantasia) &&
+      rawFantasia.length >= 2
+    ) {
+      fields.tradeName = rawFantasia;
+      confidences.tradeName = 'alta';
+      populatedLabels.push('Nome Fantasia');
+    } else {
+      fields.tradeName = ''; // Limpo expressamente se for ausente
+    }
+  }
+
+  // 5. Porte da Empresa
+  const porteMatch = normText.match(
+    /PORTE\s*[:\-]?\s*(ME|EPP|DEMAIS|MICROEMPRESA|EMPRESA\s+DE\s+PEQUENO\s+PORTE)/i
+  );
+  if (porteMatch) {
+    fields.companySize = porteMatch[1].toUpperCase();
+    confidences.companySize = 'alta';
+    populatedLabels.push('Porte');
+  }
+
+  // 6. CNAE Principal (Código e Descrição)
+  const cnaePrincipalMatch = normText.match(
+    /(?:ATIVIDADE\s+ECON[OÔ]MICA\s+PRINCIPAL)\s*[:\-]?\s*(\d{2}\.\d{2}-\d-\d{2}\s*-\s*[^\n]{5,100})/i
+  );
+  if (cnaePrincipalMatch) {
+    fields.cnaeMain = cnaePrincipalMatch[1].trim();
+    confidences.cnaeMain = 'alta';
+    populatedLabels.push('CNAE Principal');
+  } else {
+    // Fallback padrão código CNAE
+    const fallbackCnae = normText.match(/(\d{2}\.\d{2}-\d-\d{2}\s*-\s*[^\n]{5,100})/);
+    if (fallbackCnae) {
+      fields.cnaeMain = fallbackCnae[1].trim();
+      confidences.cnaeMain = 'media';
+      populatedLabels.push('CNAE Principal');
+    }
+  }
+
+  // 7. CNAEs Secundários (TODOS os códigos e descrições existentes)
+  const secundariasHeaderIndex = normText.search(/ATIVIDADES\s+ECON[OÔ]MICAS\s+SECUND[AÁ]RIAS/i);
+  if (secundariasHeaderIndex !== -1) {
+    const textAfterSecundarias = normText.slice(secundariasHeaderIndex);
+    const stopIndex = textAfterSecundarias.search(/C[OÓ]DIGO\s+E\s+DESCRI[CÇ][AÃ]O\s+DA\s+NATUREZA\s+JUR[IÍ]DICA/i);
+    const secundariasSection = stopIndex !== -1 ? textAfterSecundarias.slice(0, stopIndex) : textAfterSecundarias.slice(0, 1500);
+
+    const cnaeRegex = /(\d{2}\.\d{2}-\d-\d{2})\s*-\s*([^\n]{5,120})/g;
+    let m: RegExpExecArray | null;
+    const cnaeList: string[] = [];
+    while ((m = cnaeRegex.exec(secundariasSection)) !== null) {
+      const code = m[1].trim();
+      const desc = m[2].trim();
+      // Não duplicar o principal
+      if (fields.cnaeMain && fields.cnaeMain.startsWith(code)) continue;
+
+      secondaryCnaes.push({ code, description: desc });
+      cnaeList.push(`${code} - ${desc}`);
+    }
+
+    if (cnaeList.length > 0) {
+      fields.cnaeSecondary = cnaeList;
+      fields.cnaeSecondaryText = cnaeList.join('\n');
+      confidences.cnaeSecondary = 'alta';
+      populatedLabels.push(`CNAEs Secundários (${cnaeList.length})`);
+    }
+  }
+
+  // 8. Natureza Jurídica
+  const natMatch = normText.match(
+    /(?:NATUREZA\s+JUR[IÍ]DICA)\s*[:\-]?\s*([^\n]{5,80})/i
+  );
+  if (natMatch) {
+    fields.legalNature = natMatch[1].trim();
+    confidences.legalNature = 'alta';
+    populatedLabels.push('Natureza Jurídica');
+  }
+
+  // 9. Situação Cadastral e Data
+  const sitMatch = normText.match(/SITUA[CÇ][AÃ]O\s+CADASTRAL\s*[:\-]?\s*(ATIVA|SUSPENSA|INAPTA|BAIXADA|NULA)/i);
+  if (sitMatch) {
+    fields.cadastralSituation = sitMatch[1].toUpperCase();
+    confidences.cadastralSituation = 'alta';
+    populatedLabels.push('Situação Cadastral');
+  }
+
+  const dataSitMatch = normText.match(
+    /DATA\s+DA\s+SITUA[CÇ][AÃ]O\s+CADASTRAL\s*[:\-]?\s*(\d{1,2}[/.-]\d{1,2}[/.-]\d{4})/i
+  );
+  if (dataSitMatch) {
+    const iso = parseBrDateToISO(dataSitMatch[1]);
+    if (iso) {
+      fields.cadastralSituationDate = iso;
+      confidences.cadastralSituationDate = 'alta';
+      populatedLabels.push('Data da Situação Cadastral');
+    }
+  }
+
+  // 10. Motivo de Situação Cadastral
+  const motivoMatch = normText.match(/MOTIVO\s+DE\s+SITUA[CÇ][AÃ]O\s+CADASTRAL\s*[:\-]?\s*([^\n]+)/i);
+  if (motivoMatch && !/^\*+$/.test(motivoMatch[1].trim()) && motivoMatch[1].trim().length > 2) {
+    fields.cadastralSituationReason = motivoMatch[1].trim();
+    confidences.cadastralSituationReason = 'alta';
+    populatedLabels.push('Motivo da Situação');
+  }
+
+  // 11. Ente Federativo Responsável (EFR)
+  const efrMatch = normText.match(/ENTE\s+FEDERATIVO\s+RESPONS[AÁ]VEL\s*(?:\(EFR\))?\s*[:\-]?\s*([^\n]+)/i);
+  if (efrMatch && !/^\*+$/.test(efrMatch[1].trim()) && efrMatch[1].trim().length > 2) {
+    fields.responsibleFederativeEntity = efrMatch[1].trim();
+    confidences.responsibleFederativeEntity = 'alta';
+    populatedLabels.push('Ente Federativo (EFR)');
+  }
+
+  // 12. Endereço Completo
+  const logrMatch = normText.match(/LOGRADOURO\s*[:\-]?\s*([^\n]{3,70})/i);
+  // Procurar NÚMERO apenas após o logradouro ou excluindo expressamente NÚMERO DE INSCRIÇÃO
+  const numMatch =
+    normText.match(/(?:LOGRADOURO[\s\S]*?)(?:^|\n|\s)N[UÚ]MERO(?!\s+DE\s+INSCRI[CÇ][AÃ]O)\s*[:\-]?\s*([^\n]{1,20})/i) ||
+    normText.match(/(?:^|\n)\s*N[UÚ]MERO(?!\s+DE\s+INSCRI[CÇ][AÃ]O)\s*[:\-]?\s*([^\n]{1,20})/i);
+  const complMatch = normText.match(/COMPLEMENTO\s*[:\-]?\s*([^\n]{2,40})/i);
+  const bairroMatch = normText.match(/BAIRRO(?:\/DISTRITO)?\s*[:\-]?\s*([^\n]{2,50})/i);
+  const cepMatch = normText.match(/\b(64\d{3}-?\d{3}|\d{2}\.?\d{3}-\d{3})\b/);
+  const municMatch = normText.match(/MUNIC[IÍ]PIO\s*[:\-]?\s*([A-ZÀ-Ú ]{3,35})\s+UF\s*[:\-]?\s*([A-Z]{2})/i);
+
+  if (logrMatch) {
+    const parts = [logrMatch[1].trim()];
+    if (
+      numMatch &&
+      numMatch[1] &&
+      !/S\/N|SEM\s+NUMERO|DE\s+INSCRI/i.test(numMatch[1])
+    ) {
+      parts.push(numMatch[1].trim());
+    }
+    if (complMatch && complMatch[1] && !/^\s*$/i.test(complMatch[1]) && !/^\*+$/.test(complMatch[1].trim())) {
+      parts.push(complMatch[1].trim());
+    }
+    fields.address = parts.join(', ');
+    confidences.address = 'alta';
+    populatedLabels.push('Endereço');
+  }
+
+  if (bairroMatch && !/^\*+$/.test(bairroMatch[1].trim())) {
+    fields.neighborhood = bairroMatch[1].trim();
+    confidences.neighborhood = 'alta';
+    populatedLabels.push('Bairro');
+  }
+
+  if (cepMatch) {
+    fields.cep = formatCEP(cepMatch[1]);
+    confidences.cep = 'alta';
+    populatedLabels.push('CEP');
+  }
+
+  if (municMatch) {
+    fields.cityState = `${municMatch[1].trim()} - ${municMatch[2].trim().toUpperCase()}`;
+    fields.uf = municMatch[2].trim().toUpperCase();
+    confidences.cityState = 'alta';
+    populatedLabels.push('Cidade/UF');
+  } else if (/TERESINA/i.test(normText)) {
+    fields.cityState = 'Teresina - PI';
+    fields.uf = 'PI';
+    confidences.cityState = 'media';
+    populatedLabels.push('Cidade/UF');
+  }
+
+  // 13. Telefone e E-mail
+  const emailMatch = normText.match(/\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b/);
+  if (emailMatch && !/receita|fazenda|gov\.br/i.test(emailMatch[1])) {
+    fields.email = emailMatch[1].toLowerCase();
+    confidences.email = 'alta';
+    populatedLabels.push('E-mail');
+  }
+
+  const phoneMatch = normText.match(/(\(\d{2}\)\s*\d{4,5}-?\d{4})/);
+  if (phoneMatch) {
+    fields.phone = phoneMatch[1].trim();
+    confidences.phone = 'alta';
+    populatedLabels.push('Telefone');
+  }
+
+  return {
+    detected: Boolean(isCartao || fields.cnpj),
+    fields,
+    confidences,
+    secondaryCnaes,
+    populatedLabels,
+    rawText: normText,
+  };
+}
+
+/**
+ * ============================================================================
+ * EXTRATOR ESPECIALIZADO 2: CNH (CARTEIRA NACIONAL DE HABILITAÇÃO / CNH DIGITAL)
+ * ============================================================================
+ */
+export function extractCnhData(text: string): CnhExtractionResult {
+  const normText = cleanText(text);
+  const fields: Partial<CompanyBasicProfile> = {};
+  const confidences: Record<string, FieldConfidence> = {};
+  const populatedLabels: string[] = [];
+
   const isCnh =
-    hintDocType === 'cnh_socio' ||
-    fileNameLower.includes('cnh') ||
-    fileNameLower.includes('habilitacao') ||
-    fileNameLower.includes('condutor') ||
     /CARTEIRA\s+NACIONAL\s+DE\s+HABILITA[CÇ][AÃ]O/i.test(normText) ||
     /CARTEIRA\s+DIGITAL\s+DE\s+TR[AÂ]NSITO/i.test(normText) ||
     /HABILITA[CÇ][AÃ]O/i.test(normText) ||
@@ -357,414 +507,382 @@ export async function readCompanyDocument(
     /DENATRAN/i.test(normText) ||
     (/CONDUTOR/i.test(normText) && /DETRAN/i.test(normText)) ||
     /PERMISS[AÃ]O\s+PARA\s+DIRIGIR/i.test(normText) ||
-    /CAT\.\s*HAB/i.test(normText);
+    /CAT\.\s*HAB/i.test(normText) ||
+    /N[º°]?\s*REGISTRO/i.test(normText);
 
-  const isRg =
-    hintDocType === 'rg_socio' ||
-    fileNameLower.includes('rg') ||
-    fileNameLower.includes('identidade') ||
-    /REGISTRO\s+GERAL/i.test(normText) ||
-    /CARTEIRA\s+DE\s+IDENTIDADE/i.test(normText) ||
-    /SECRETARIA\s+DE\s+SEGURAN[CÇ]A\s+P[UÚ]BLICA/i.test(normText) ||
-    /SSP[- /]?[A-Z]{2}/i.test(normText);
+  // 1. CPF (Validado matematicamente com dígitos verificadores)
+  const cpf = findBestCPF(normText);
+  if (cpf && isValidCPF(cpf)) {
+    fields.partnerCpf = cpf;
+    confidences.partnerCpf = 'alta';
+    populatedLabels.push('CPF do Titular');
+  }
 
-  const isContratoSocial =
-    hintDocType === 'contrato_social' ||
-    fileNameLower.includes('contrato') ||
-    fileNameLower.includes('jucepi') ||
-    fileNameLower.includes('alteracao') ||
-    /CONTRATO\s+SOCIAL/i.test(normText) ||
-    /ALTERA[CÇ][AÃ]O\s+CONTRATUAL/i.test(normText) ||
-    /REQUERIMENTO\s+DE\s+EMPRES[AÁ]RIO/i.test(normText) ||
-    /ESTATUTO\s+SOCIAL/i.test(normText) ||
-    /JUNTA\s+COMERCIAL/i.test(normText) ||
-    /\bJUCEPI\b/i.test(normText);
+  // 2. Número de Registro da CNH (11 dígitos, distindo do CPF!)
+  const registroMatch = normText.match(
+    /(?:(?:6\.\s*)?N[º°]?\s*REGISTRO|REGISTRO\s+CNH|REGISTRO\s+NACIONAL)\s*[:\-]?\s*(\d{9,12})\b/i
+  );
+  if (registroMatch) {
+    const rawReg = registroMatch[1];
+    // Garantir que não é idêntico ao CPF
+    if (!cpf || onlyDigits(cpf) !== rawReg) {
+      fields.partnerCnhNumber = rawReg;
+      confidences.partnerCnhNumber = 'alta';
+      populatedLabels.push('Nº Registro CNH');
+    }
+  }
 
-  const isIeSefaz =
-    hintDocType === 'ie_sefaz' ||
-    /SECRETARIA\s+DA\s+FAZENDA/i.test(normText) ||
-    /\bSEFAZ\b/i.test(normText) ||
-    /CADASTRO\s+DE\s+CONTRIBUINTES/i.test(normText) ||
-    /SITUA[CÇ][AÃ]O\s+FISCAL\s+ESTADUAL/i.test(normText);
+  // 3. Nome Completo do Titular (Cuidado para NUNCA pegar a filiação!)
+  const nameMatch = normText.match(
+    /(?:(?:^|\n|\s)(?:1\.\s*)?NOME(?:\s+DO\s+CONDUTOR|\s+COMPLETO)?\s*[:\-]?\s*)([A-ZÀ-Úa-zà-ú\s]{5,70})(?=\n|\r|DOC|FILIA|IDENTIDADE|CPF|DATA|$)/i
+  );
+  if (nameMatch && nameMatch[1]) {
+    const candidate = sanitizeCandidateName(nameMatch[1]);
+    if (candidate) {
+      fields.partnerName = candidate;
+      confidences.partnerName = 'alta';
+      populatedLabels.push('Nome do Titular');
+    }
+  } else {
+    // Procura linha seguinte ao rótulo NOME
+    const multilineName = normText.match(
+      /(?:(?:^|\n)\s*(?:1\.\s*)?NOME\s*[:\-]?\s*\n\s*)([A-ZÀ-Úa-zà-ú\s]{5,70})(?=\n|\r|DOC|FILIA|IDENTIDADE|CPF|DATA|$)/i
+    );
+    if (multilineName && multilineName[1]) {
+      const candidate = sanitizeCandidateName(multilineName[1]);
+      if (candidate) {
+        fields.partnerName = candidate;
+        confidences.partnerName = 'alta';
+        populatedLabels.push('Nome do Titular');
+      }
+    }
+  }
 
-  const isImPrefeitura =
-    hintDocType === 'im_prefeitura' ||
-    /PREFEITURA\s+MUNICIPAL/i.test(normText) ||
-    /SECRETARIA\s+MUNICIPAL/i.test(normText) ||
-    /\bSEMF\b/i.test(normText) ||
-    /\bSIAT\b/i.test(normText) ||
-    /CADASTRO\s+MERCANTIL/i.test(normText);
+  // 4. Documento de Identidade (RG) e Órgão Emissor / UF
+  const rgMatch = normText.match(
+    /(?:(?:2\.\s*)?DOC\.?\s*(?:DE\s*)?IDENTIDADE\s*(?:\/\s*[OÓ]RG\.?\s*EMISSOR\s*\/\s*UF)?)\s*[:\-]?\s*([0-9A-Za-z\.\-\/\s]{4,30})(?=\n|CPF|DATA|FILIA|$)/i
+  );
+  if (rgMatch && rgMatch[1]) {
+    let cleanRg = rgMatch[1]
+      .split(/\r?\n/)[0]
+      .replace(/\s+(?:\d\.\s*)?(?:CPF|DATA|FILIA|NASC).*$/i, '')
+      .replace(/\s+\d+\.?$/, '')
+      .trim();
+    if (cleanRg.length >= 4) {
+      if (!/SSP|DETRAN|PC|DIC/i.test(cleanRg) && /PI\b|PIAUI|TERESINA/i.test(normText)) {
+        cleanRg = `${cleanRg} SSP-PI`;
+      }
+      fields.partnerRg = cleanRg;
+      confidences.partnerRg = 'alta';
+      populatedLabels.push('RG do Titular');
+    }
+  }
 
-  // --------------------------------------------------------------------------
-  // EXTRAÇÃO ESPECÍFICA POR TIPO (PRIORIDADE MÁXIMA PARA CNH NOS DADOS DE SÓCIO)
-  // --------------------------------------------------------------------------
+  // 5. Quatro Datas Distintas na CNH:
+  // a) DATA DE NASCIMENTO
+  const birthMatch = normText.match(
+    /(?:(?:4\.\s*)?DATA\s+(?:DE\s+)?NASCIMENTO|NASC(?:IMENTO|\.)?)\s*[:\-]?\s*(\d{1,2}[/.-]\d{1,2}[/.-]\d{4})/i
+  );
+  if (birthMatch) {
+    const iso = parseBrDateToISO(birthMatch[1]);
+    if (iso) {
+      const year = parseInt(iso.substring(0, 4), 10);
+      if (year >= 1920 && year <= 2007) {
+        fields.partnerBirthDate = iso;
+        confidences.partnerBirthDate = 'alta';
+        populatedLabels.push('Data de Nascimento');
+      }
+    }
+  }
+
+  // b) DATA DA 1ª HABILITAÇÃO
+  const firstLicenseMatch = normText.match(
+    /(?:(?:8\.\s*)?1[ªa]?\s*HABILITA[CÇ][AÃ]O|PRIMEIRA\s+HABILITA[CÇ][AÃ]O)\s*[:\-]?\s*(\d{1,2}[/.-]\d{1,2}[/.-]\d{4})/i
+  );
+  if (firstLicenseMatch) {
+    const iso = parseBrDateToISO(firstLicenseMatch[1]);
+    if (iso) {
+      fields.partnerCnhFirstLicenseDate = iso;
+      confidences.partnerCnhFirstLicenseDate = 'alta';
+      populatedLabels.push('1ª Habilitação');
+    }
+  }
+
+  // c) DATA DE VALIDADE (Extraída DIRETAMENTE do documento, NUNCA calculada automaticamente!)
+  const validityMatch = normText.match(
+    /(?:(?:7\.\s*)?VALIDADE)\s*[:\-]?\s*(\d{1,2}[/.-]\d{1,2}[/.-]\d{4})/i
+  );
+  if (validityMatch) {
+    const iso = parseBrDateToISO(validityMatch[1]);
+    if (iso) {
+      fields.partnerCnhExpirationDate = iso;
+      confidences.partnerCnhExpirationDate = 'alta';
+      populatedLabels.push('Validade da CNH');
+    }
+  }
+
+  // d) DATA DE EMISSÃO DA CNH
+  const issueMatch = normText.match(
+    /(?:(?:9\.\s*)?DATA\s+(?:DE\s+)?EMISS[AÃ]O|EMISS[AÃ]O)\s*[:\-]?\s*(\d{1,2}[/.-]\d{1,2}[/.-]\d{4})/i
+  );
+  if (issueMatch) {
+    const iso = parseBrDateToISO(issueMatch[1]);
+    if (iso) {
+      fields.partnerCnhIssueDate = iso;
+      confidences.partnerCnhIssueDate = 'alta';
+      populatedLabels.push('Data de Emissão CNH');
+    }
+  }
+
+  // 6. Categoria de Habilitação
+  const catMatch = normText.match(
+    /(?:(?:5\.\s*)?CAT\.?\s*HAB\.?|CATEGORIA)\s*[:\-]?\s*(ACC|AB|A|B|C|D|E)\b/i
+  );
+  if (catMatch) {
+    fields.partnerCnhCategory = catMatch[1].toUpperCase();
+    confidences.partnerCnhCategory = 'alta';
+    populatedLabels.push('Categoria CNH');
+  }
+
+  // 7. Filiação
+  const filiacaoMatch = normText.match(
+    /FILIA[CÇ][AÃ]O\s*[:\-]?\s*([\s\S]{10,120}?)(?=(?:PERMISS|ACC|CAT|REGISTRO|VALIDADE|LOCAL|\d+\.))/i
+  );
+  if (filiacaoMatch) {
+    const parents = filiacaoMatch[1]
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 3 && !/REP[UÚ]BLICA|MINIST|CARTEIRA/i.test(l))
+      .slice(0, 2)
+      .join(' / ');
+    if (parents) {
+      fields.partnerParents = parents.toUpperCase();
+      confidences.partnerParents = 'media';
+      populatedLabels.push('Filiação');
+    }
+  }
+
+  // 8. Local / Nacionalidade
+  const localMatch = normText.match(/LOCAL\s*[:\-]?\s*([A-ZÀ-Ú ]{3,30}[,/ -]+[A-Z]{2})/i);
+  if (localMatch) {
+    fields.partnerNationality = localMatch[1].trim();
+    confidences.partnerNationality = 'alta';
+    populatedLabels.push('Local CNH');
+  }
+
+  return {
+    detected: Boolean(isCnh || fields.partnerCpf || fields.partnerCnhNumber),
+    fields,
+    confidences,
+    populatedLabels,
+    rawText: normText,
+  };
+}
+
+/**
+ * ============================================================================
+ * CONSTRUTOR DE ITENS PARA A TELA DE CONFERÊNCIA (DIFFS E CONFIDÊNCIAS)
+ * ============================================================================
+ */
+export function buildCompanyDocFieldItems(
+  extracted: Partial<CompanyBasicProfile>,
+  currentCompany: Partial<CompanyBasicProfile>,
+  detectedType: CompanyDocType,
+  confidences: Record<string, FieldConfidence> = {}
+): CompanyDocFieldItem[] {
+  const items: CompanyDocFieldItem[] = [];
+
+  const addField = (
+    key: keyof CompanyBasicProfile,
+    label: string,
+    group: 'identificacao' | 'atividades' | 'endereco' | 'contato' | 'cnh_dados',
+    overrideConfidence?: FieldConfidence
+  ) => {
+    const extVal = (extracted[key] as string) || '';
+    if (!extVal && extVal !== '') return; // Skip if no value extracted at all
+
+    const curVal = (currentCompany[key] as string) || '';
+    const isDivergent = Boolean(curVal && extVal && curVal.trim().toLowerCase() !== extVal.trim().toLowerCase());
+    const confidence = overrideConfidence || confidences[key as string] || 'alta';
+
+    // Regra de segurança: se divergir em CNPJ ou CPF, NÃO aceitar automaticamente!
+    const defaultAccepted = !(isDivergent && (key === 'cnpj' || key === 'partnerCpf'));
+
+    items.push({
+      key: key as string,
+      label,
+      group,
+      extractedValue: extVal,
+      currentValue: curVal,
+      confidence,
+      accepted: defaultAccepted,
+      isDivergent,
+      isValid: key === 'cnpj' ? isValidCNPJ(extVal) : key === 'partnerCpf' ? isValidCPF(extVal) : true,
+    });
+  };
+
+  if (detectedType === 'cnpj') {
+    addField('cnpj', 'CNPJ da Empresa', 'identificacao');
+    addField('companyName', 'Razão Social (Nome Empresarial)', 'identificacao');
+    addField('tradeName', 'Nome Fantasia', 'identificacao');
+    addField('openingDate', 'Data de Abertura', 'identificacao');
+    addField('cadastralSituation', 'Situação Cadastral', 'identificacao');
+    addField('cadastralSituationDate', 'Data da Situação Cadastral', 'identificacao');
+    addField('cadastralSituationReason', 'Motivo da Situação', 'identificacao');
+    addField('legalNature', 'Natureza Jurídica', 'identificacao');
+    addField('companySize', 'Porte da Empresa', 'identificacao');
+    addField('responsibleFederativeEntity', 'Ente Federativo (EFR)', 'identificacao');
+
+    addField('cnaeMain', 'CNAE Principal', 'atividades');
+    addField('cnaeSecondaryText', 'CNAEs Secundários', 'atividades');
+
+    addField('address', 'Logradouro e Número', 'endereco');
+    addField('neighborhood', 'Bairro / Distrito', 'endereco');
+    addField('cep', 'CEP', 'endereco');
+    addField('cityState', 'Município / UF', 'endereco');
+
+    addField('phone', 'Telefone', 'contato');
+    addField('email', 'E-mail Oficial', 'contato');
+  } else if (detectedType === 'cnh_socio' || detectedType === 'rg_socio') {
+    addField('partnerName', 'Nome Completo do Titular', 'cnh_dados');
+    addField('partnerCpf', 'CPF do Titular', 'cnh_dados');
+    addField('partnerBirthDate', 'Data de Nascimento', 'cnh_dados');
+    addField('partnerRg', 'Documento de Identidade (RG)', 'cnh_dados');
+    addField('partnerCnhNumber', 'Nº Registro da CNH', 'cnh_dados');
+    addField('partnerCnhCategory', 'Categoria da Habilitação', 'cnh_dados');
+    addField('partnerCnhExpirationDate', 'Data de Validade da CNH', 'cnh_dados');
+    addField('partnerCnhFirstLicenseDate', 'Data da 1ª Habilitação', 'cnh_dados');
+    addField('partnerCnhIssueDate', 'Data de Emissão da CNH', 'cnh_dados');
+    addField('partnerParents', 'Filiação', 'cnh_dados');
+    addField('partnerNationality', 'Local / Nacionalidade', 'cnh_dados');
+  } else {
+    // Genérico / Outro
+    addField('companyName', 'Razão Social', 'identificacao');
+    addField('cnpj', 'CNPJ', 'identificacao');
+    addField('partnerName', 'Nome do Sócio / Representante', 'cnh_dados');
+    addField('partnerCpf', 'CPF do Sócio', 'cnh_dados');
+    addField('address', 'Endereço', 'endereco');
+  }
+
+  return items;
+}
+
+/**
+ * Função principal de leitura com fluxo por etapas e extratores especializados
+ */
+export async function readCompanyDocument(
+  file: File,
+  onProgress?: (msg: string) => void,
+  hintDocType?: CompanyDocType,
+  currentCompany?: Partial<CompanyBasicProfile>
+): Promise<CompanyDocReadResult> {
+  onProgress?.('Extraindo texto nativo com PDF.js / OCR Tesseract...');
+  const { text } = await extractTextLocallyFromFile(file, onProgress);
+  const normText = cleanText(text);
+
+  let detectedType: CompanyDocType = hintDocType || 'outro';
+  let detectedTitle = 'Documento da Empresa';
   let isCnhPartnerPriority = false;
 
-  if (hintDocType === 'cnh_socio' || isCnh) {
+  const fileNameLower = file.name.toLowerCase();
+
+  // ETAPA 1 — IDENTIFICAÇÃO DO DOCUMENTO
+  const cnpjCheck = extractCnpjCardData(normText);
+  const cnhCheck = extractCnhData(normText);
+
+  if (hintDocType === 'cnh_socio' || (cnhCheck.detected && !cnpjCheck.detected)) {
     detectedType = 'cnh_socio';
     detectedTitle = 'CNH do Sócio Administrador';
     isCnhPartnerPriority = true;
-
-    // CPF DO SÓCIO (PRIORIDADE MÁXIMA)
-    const partnerCpf = findBestCPF(normText, extracted.cnpj);
-    if (partnerCpf) {
-      extracted.partnerCpf = partnerCpf;
-      populatedLabels.push('CPF do Sócio (Prioridade CNH)');
-    }
-
-    // NOME DO SÓCIO (PRIORIDADE MÁXIMA)
-    const partnerName = findPartnerName(normText, 'cnh_socio');
-    if (partnerName) {
-      extracted.partnerName = partnerName;
-      populatedLabels.push('Nome do Sócio (Prioridade CNH)');
-    }
-
-    // DATA DE NASCIMENTO (PRIORIDADE MÁXIMA)
-    const birthDate = findPartnerBirthDate(normText);
-    if (birthDate) {
-      extracted.partnerBirthDate = birthDate;
-      populatedLabels.push('Data de Nascimento (Prioridade CNH)');
-    }
-
-    // RG (PRIORIDADE MÁXIMA)
-    const rg = findPartnerRG(normText);
-    if (rg) {
-      extracted.partnerRg = rg;
-      populatedLabels.push('RG do Sócio (Prioridade CNH)');
-    }
-  } else if (isCartaoCnpj) {
+  } else if (hintDocType === 'cnpj' || cnpjCheck.detected) {
     detectedType = 'cnpj';
     detectedTitle = 'Cartão CNPJ (Receita Federal)';
-
-    const cnpj = findBestCNPJ(normText);
-    if (cnpj) {
-      extracted.cnpj = cnpj;
-      populatedLabels.push('CNPJ');
-    }
-
-    // Data de Abertura
-    const aberturaMatch = normText.match(
-      /(?:DATA\s+DE\s+ABERTURA|ABERTURA)\s*[:\-]?\s*(\d{1,2}[/.-]\d{1,2}[/.-]\d{4})/i
-    );
-    if (aberturaMatch) {
-      const iso = parseBrDateToISO(aberturaMatch[1]);
-      if (iso) {
-        extracted.openingDate = iso;
-        populatedLabels.push('Data de Abertura');
-      }
-    }
-
-    // Nome Empresarial (Razão Social)
-    const razaoMatch = normText.match(
-      /(?:NOME\s+EMPRESARIAL|RAZ[AÃ]O\s+SOCIAL)\s*[:\-]?\s*([A-ZÀ-Ú0-9][A-ZÀ-Ú0-9 .,&/\-]{3,80}?)(?=\n|T[IÍ]TULO|NOME\s+FANTASIA|PORTE|CÓDIGO|$)/i
-    );
-    if (razaoMatch && razaoMatch[1]) {
-      const r = razaoMatch[1].trim();
-      if (!/REP[UÚ]BLICA|MINIST[EÉ]RIO/i.test(r)) {
-        extracted.companyName = r;
-        populatedLabels.push('Razão Social');
-      }
-    }
-
-    // Nome Fantasia
-    const fantasiaMatch = normText.match(
-      /(?:T[IÍ]TULO\s+DO\s+ESTABELECIMENTO\s*\(NOME\s+DE\s+FANTASIA\)|NOME\s+FANTASIA)\s*[:\-]?\s*([A-ZÀ-Ú0-9][A-ZÀ-Ú0-9 .,&/\-]{2,70}?)(?=\n|PORTE|CÓDIGO|ATIVIDADE|CNPJ|$)/i
-    );
-    if (fantasiaMatch && fantasiaMatch[1] && !/\*{3,}/.test(fantasiaMatch[1])) {
-      extracted.tradeName = fantasiaMatch[1].trim();
-      populatedLabels.push('Nome Fantasia');
-    }
-
-    // Porte
-    const porteMatch = normText.match(/PORTE\s*[:\-]?\s*(ME|EPP|DEMAIS|MICROEMPRESA)/i);
-    if (porteMatch) {
-      extracted.companySize = porteMatch[1].toUpperCase();
-      populatedLabels.push('Porte');
-    }
-
-    // CNAE Principal
-    const cnaeMatch = normText.match(/(\d{2}\.\d{2}-\d-\d{2}\s*-\s*[^\n]{5,90})/);
-    if (cnaeMatch) {
-      extracted.cnaeMain = cnaeMatch[1].trim();
-      populatedLabels.push('CNAE Principal');
-    }
-
-    // Natureza Jurídica
-    const natMatch = normText.match(
-      /(?:C[OÓ]DIGO\s+E\s+DESCRI[CÇ][AÃ]O\s+DA\s+NATUREZA\s+JUR[IÍ]DICA)\s*[:\-]?\s*([^\n]{5,80})/i
-    );
-    if (natMatch) {
-      extracted.legalNature = natMatch[1].trim();
-      populatedLabels.push('Natureza Jurídica');
-    }
-
-    // Endereço
-    const logrMatch = normText.match(/LOGRADOURO\s*[:\-]?\s*([^\n]{3,70})/i);
-    const numMatch = normText.match(/N[UÚ]MERO\s*[:\-]?\s*([^\n]{1,20})/i);
-    const complMatch = normText.match(/COMPLEMENTO\s*[:\-]?\s*([^\n]{2,40})/i);
-    const bairroMatch = normText.match(/BAIRRO(?:\/DISTRITO)?\s*[:\-]?\s*([^\n]{2,50})/i);
-    const cepMatch = normText.match(/\b(64\d{3}-?\d{3}|\d{2}\.?\d{3}-\d{3})\b/);
-    const municMatch = normText.match(/MUNIC[IÍ]PIO\s*[:\-]?\s*([A-ZÀ-Ú ]{3,35})\s+UF\s*[:\-]?\s*([A-Z]{2})/i);
-
-    if (logrMatch) {
-      const parts = [logrMatch[1].trim()];
-      if (numMatch && numMatch[1] && !/S\/N|SEM\s+NUMERO/i.test(numMatch[1])) {
-        parts.push(numMatch[1].trim());
-      }
-      if (complMatch && complMatch[1] && !/^\s*$/i.test(complMatch[1])) {
-        parts.push(complMatch[1].trim());
-      }
-      extracted.address = parts.join(', ');
-      populatedLabels.push('Endereço');
-    }
-
-    if (bairroMatch) {
-      extracted.neighborhood = bairroMatch[1].trim();
-      populatedLabels.push('Bairro');
-    }
-
-    if (cepMatch) {
-      extracted.cep = formatCEP(cepMatch[1]);
-      populatedLabels.push('CEP');
-    }
-
-    if (municMatch) {
-      extracted.cityState = `${municMatch[1].trim()} - ${municMatch[2].trim().toUpperCase()}`;
-      extracted.uf = municMatch[2].trim().toUpperCase();
-      populatedLabels.push('Cidade/UF');
-    } else if (/TERESINA/i.test(normText)) {
-      extracted.cityState = 'Teresina - PI';
-      extracted.uf = 'PI';
-      populatedLabels.push('Cidade/UF');
-    }
-
-    // Situação Cadastral
-    const sitMatch = normText.match(/SITUA[CÇ][AÃ]O\s+CADASTRAL\s*[:\-]?\s*(ATIVA|SUSPENSA|INAPTA|BAIXADA)/i);
-    if (sitMatch) {
-      extracted.cadastralSituation = sitMatch[1].toUpperCase();
-      populatedLabels.push('Situação Cadastral');
-    }
-
-    // E-mail e Telefone
-    const emailMatch = normText.match(/\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b/);
-    if (emailMatch && !/receita|fazenda|gov\.br/i.test(emailMatch[1])) {
-      extracted.email = emailMatch[1].toLowerCase();
-      populatedLabels.push('E-mail');
-    }
-
-    const phoneMatch = normText.match(/(\(\d{2}\)\s*\d{4,5}-?\d{4})/);
-    if (phoneMatch) {
-      extracted.phone = phoneMatch[1].trim();
-      populatedLabels.push('Telefone');
-    }
-  } else if (isRg) {
-    detectedType = 'rg_socio';
-    detectedTitle = 'RG do Sócio Administrador';
-
-    const partnerCpf = findBestCPF(normText, extracted.cnpj);
-    if (partnerCpf) {
-      extracted.partnerCpf = partnerCpf;
-      populatedLabels.push('CPF do Sócio');
-    }
-
-    const partnerName = findPartnerName(normText, 'rg_socio');
-    if (partnerName) {
-      extracted.partnerName = partnerName;
-      populatedLabels.push('Nome do Sócio');
-    }
-
-    const birthDate = findPartnerBirthDate(normText);
-    if (birthDate) {
-      extracted.partnerBirthDate = birthDate;
-      populatedLabels.push('Data de Nascimento do Sócio');
-    }
-
-    const rg = findPartnerRG(normText);
-    if (rg) {
-      extracted.partnerRg = rg;
-      populatedLabels.push('RG do Sócio');
-    }
-  } else if (isContratoSocial) {
+  } else if (
+    hintDocType === 'contrato_social' ||
+    fileNameLower.includes('contrato') ||
+    fileNameLower.includes('jucepi') ||
+    /CONTRATO\s+SOCIAL/i.test(normText)
+  ) {
     detectedType = 'contrato_social';
     detectedTitle = 'Contrato Social / JUCEPI';
+  } else if (cnhCheck.detected) {
+    detectedType = 'cnh_socio';
+    detectedTitle = 'CNH do Sócio Administrador';
+    isCnhPartnerPriority = true;
+  }
 
-    // NIRE (11 dígitos, no Piauí começa com 22)
-    const nireMatch = normText.match(/\bNIRE\s*[:\-º°]?\s*(22\d{9}|\d{11})\b/i);
-    if (nireMatch) {
-      extracted.nire = nireMatch[1].trim();
-      populatedLabels.push('NIRE (JUCEPI)');
-    }
+  // ETAPA 2 — INTERPRETAÇÃO ESTRUTURADA COM EXTRATORES DEDICADOS
+  let extractedFields: Partial<CompanyBasicProfile> = {};
+  let populatedLabels: string[] = [];
+  let confidences: Record<string, FieldConfidence> = {};
 
-    // CNPJ no Contrato
-    const cnpj = findBestCNPJ(normText);
-    if (cnpj) {
-      extracted.cnpj = cnpj;
+  if (detectedType === 'cnpj') {
+    extractedFields = cnpjCheck.fields;
+    populatedLabels = cnpjCheck.populatedLabels;
+    confidences = cnpjCheck.confidences;
+  } else if (detectedType === 'cnh_socio' || detectedType === 'rg_socio') {
+    extractedFields = cnhCheck.fields;
+    populatedLabels = cnhCheck.populatedLabels;
+    confidences = cnhCheck.confidences;
+  } else {
+    // Fallback genérico
+    if (cnpjCheck.fields.cnpj) {
+      extractedFields.cnpj = cnpjCheck.fields.cnpj;
       populatedLabels.push('CNPJ');
     }
-
-    // Razão Social
-    const razaoMatch = normText.match(
-      /(?:DENOMINA[CÇ][AÃ]O\s+SOCIAL|RAZ[AÃ]O\s+SOCIAL|NOME\s+EMPRESARIAL)\s*[:\-]?\s*([A-ZÀ-Ú0-9][A-ZÀ-Ú0-9 .,&/\-]{3,80}?)(?=\n|COM\s+SEDE|CLÁUSULA|$)/i
-    );
-    if (razaoMatch) {
-      extracted.companyName = razaoMatch[1].trim();
-      populatedLabels.push('Razão Social');
-    }
-
-    // Capital Social
-    const capMatch = normText.match(/CAPITAL\s+SOCIAL[^\n\d]{1,40}(?:R\$\s*)?([\d.,]+)/i);
-    if (capMatch) {
-      extracted.shareCapital = `R$ ${capMatch[1].trim()}`;
-      populatedLabels.push('Capital Social');
-    }
-
-    // Sócio Administrador
-    const partnerName = findPartnerName(normText, 'contrato_social');
-    if (partnerName) {
-      extracted.partnerName = partnerName;
-      populatedLabels.push('Sócio Administrador');
-    }
-
-    // CPF do Sócio
-    const partnerCpf = findBestCPF(normText, extracted.cnpj);
-    if (partnerCpf) {
-      extracted.partnerCpf = partnerCpf;
+    if (cnhCheck.fields.partnerCpf) {
+      extractedFields.partnerCpf = cnhCheck.fields.partnerCpf;
       populatedLabels.push('CPF do Sócio');
     }
-  } else if (isIeSefaz) {
-    detectedType = 'ie_sefaz';
-    detectedTitle = 'Inscrição Estadual (SEFAZ-PI)';
-
-    const ieMatch = normText.match(
-      /(?:INSCRI[CÇ][AÃ]O\s+ESTADUAL|I\.?\s*E\.?|CGF)\s*[:\-º°]?\s*([\d.\-]{7,15})/i
-    );
-    if (ieMatch) {
-      extracted.stateRegistration = ieMatch[1].trim();
-      populatedLabels.push('Inscrição Estadual');
-    }
-
-    const cnpj = findBestCNPJ(normText);
-    if (cnpj) {
-      extracted.cnpj = cnpj;
-      populatedLabels.push('CNPJ');
-    }
-  } else if (isImPrefeitura) {
-    detectedType = 'im_prefeitura';
-    detectedTitle = 'Inscrição Municipal (Prefeitura / SIAT)';
-
-    const imMatch = normText.match(
-      /(?:INSCRI[CÇ][AÃ]O\s+MUNICIPAL|C\.?\s*M\.?\s*C\.?|CADASTRO\s+MERCANTIL)\s*[:\-º°]?\s*([\d.\-]{4,14})/i
-    );
-    if (imMatch) {
-      extracted.municipalRegistration = imMatch[1].trim();
-      populatedLabels.push('Inscrição Municipal');
-    }
-
-    const cnpj = findBestCNPJ(normText);
-    if (cnpj) {
-      extracted.cnpj = cnpj;
-      populatedLabels.push('CNPJ');
+    if (cnhCheck.fields.partnerName) {
+      extractedFields.partnerName = cnhCheck.fields.partnerName;
+      populatedLabels.push('Nome do Sócio');
     }
   }
 
-  // --------------------------------------------------------------------------
-  // UNIVERSAL EXTRACTION PASS (FALLBACK TOTAL)
-  // Garante que, independentemente do tipo ou botão clicado, se houver
-  // CPF do sócio, Nome, RG, Nascimento ou CNPJ no documento, eles serão lidos!
-  // --------------------------------------------------------------------------
-
-  // 1. CPF do Sócio (se ainda não extraído)
-  if (!extracted.partnerCpf) {
-    const fallbackCpf = findBestCPF(normText, extracted.cnpj);
-    if (fallbackCpf) {
-      extracted.partnerCpf = fallbackCpf;
-      if (!populatedLabels.includes('CPF do Sócio')) {
-        populatedLabels.push('CPF do Sócio');
-      }
-    }
+  // ETAPA 3 — DIVERGÊNCIA E CONFERÊNCIA
+  let cnpjDivergenceWithCurrent = false;
+  if (
+    currentCompany?.cnpj &&
+    extractedFields.cnpj &&
+    onlyDigits(currentCompany.cnpj) !== onlyDigits(extractedFields.cnpj)
+  ) {
+    cnpjDivergenceWithCurrent = true;
   }
 
-  // 2. Nome do Sócio (se ainda não extraído)
-  if (!extracted.partnerName) {
-    const fallbackName = findPartnerName(normText, hintDocType);
-    if (fallbackName) {
-      extracted.partnerName = fallbackName;
-      if (!populatedLabels.includes('Nome do Sócio')) {
-        populatedLabels.push('Nome do Sócio');
-      }
-    }
+  let cnhDivergenceWithCurrent = false;
+  if (
+    currentCompany?.partnerCpf &&
+    extractedFields.partnerCpf &&
+    onlyDigits(currentCompany.partnerCpf) !== onlyDigits(extractedFields.partnerCpf)
+  ) {
+    cnhDivergenceWithCurrent = true;
   }
 
-  // 3. Data de Nascimento do Sócio (se ainda não extraída)
-  if (!extracted.partnerBirthDate) {
-    const fallbackBirth = findPartnerBirthDate(normText);
-    if (fallbackBirth) {
-      extracted.partnerBirthDate = fallbackBirth;
-      if (!populatedLabels.includes('Data de Nascimento do Sócio')) {
-        populatedLabels.push('Data de Nascimento do Sócio');
-      }
-    }
-  }
+  const fieldItems = buildCompanyDocFieldItems(
+    extractedFields,
+    currentCompany || {},
+    detectedType,
+    confidences
+  );
 
-  // 4. RG do Sócio (se ainda não extraído)
-  if (!extracted.partnerRg) {
-    const fallbackRg = findPartnerRG(normText);
-    if (fallbackRg) {
-      extracted.partnerRg = fallbackRg;
-      if (!populatedLabels.includes('RG do Sócio')) {
-        populatedLabels.push('RG do Sócio');
-      }
-    }
-  }
-
-  // 5. CNPJ (se ainda não extraído)
-  if (!extracted.cnpj) {
-    const fallbackCnpj = findBestCNPJ(normText);
-    if (fallbackCnpj) {
-      extracted.cnpj = fallbackCnpj;
-      if (!populatedLabels.includes('CNPJ')) {
-        populatedLabels.push('CNPJ');
-      }
-    }
-  }
-
-  // 6. CEP (se ainda não extraído)
-  if (!extracted.cep) {
-    const cepMatch = normText.match(/\b(64\d{3}-?\d{3}|\d{2}\.?\d{3}-\d{3})\b/);
-    if (cepMatch) {
-      extracted.cep = formatCEP(cepMatch[1]);
-      if (!populatedLabels.includes('CEP')) {
-        populatedLabels.push('CEP');
-      }
-    }
-  }
-
-  // 7. Telefone (se ainda não extraído)
-  if (!extracted.phone) {
-    const phoneMatch = normText.match(/(\(\d{2}\)\s*\d{4,5}-?\d{4})/);
-    if (phoneMatch) {
-      extracted.phone = formatPhone(phoneMatch[1]);
-      if (!populatedLabels.includes('Telefone')) {
-        populatedLabels.push('Telefone');
-      }
-    }
-  }
-
-  // Montar Resumo da Análise
   let summary = '';
   if (populatedLabels.length > 0) {
-    summary = `Identificado: ${detectedTitle}. Campos preenchidos automaticamente: ${populatedLabels.join(', ')}.`;
+    summary = `Identificado: ${detectedTitle}. Campos reconhecidos: ${populatedLabels.join(', ')}.`;
   } else {
-    summary = `Documento anexado (${file.name}). Preencha os campos adicionais manualmente caso necessário.`;
+    summary = `Documento anexado (${file.name}). Nenhum campo automático identificado com certeza; confira manualmente.`;
   }
 
   return {
     detectedType,
     detectedTitle,
-    extractedFields: extracted,
+    extractedFields,
+    fieldItems,
     populatedFieldLabels: populatedLabels,
     summary,
     rawTextSample: normText.slice(0, 300),
     isCnhPartnerPriority,
+    cnpjDivergenceWithCurrent,
+    cnhDivergenceWithCurrent,
   };
 }

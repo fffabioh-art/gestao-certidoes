@@ -247,6 +247,14 @@ export const ReviewExtractionModal: React.FC<ReviewExtractionModalProps> = ({
                         </span>
                       )}
                     </label>
+                    {item.hasCompanyMismatch && (
+                      <div className="mb-2 p-2 rounded-lg bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 text-[11px] text-amber-900 dark:text-amber-200 flex items-start gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                        <div>
+                          <strong>Divergência de Empresa:</strong> {item.companyMismatchReason || 'O CNPJ lido neste arquivo diverge da empresa atualmente selecionada.'}
+                        </div>
+                      </div>
+                    )}
                     <select
                       value={item.matchedCompanyId}
                       onChange={(e) => {

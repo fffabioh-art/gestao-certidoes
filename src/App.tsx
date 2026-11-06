@@ -1379,6 +1379,9 @@ export default function App() {
 
         // 1. Localizar empresa correspondente pelo CNPJ ou Razão Social
         let matchedCompany: CompanyProfile | undefined;
+        let hasCompanyMismatch = false;
+        let companyMismatchReason = '';
+
         if (options?.forceCompanyId) {
           matchedCompany = companies.find((c) => c.id === options.forceCompanyId);
         }
@@ -1392,6 +1395,20 @@ export default function App() {
             c.companyName.toLowerCase().includes(normName)
           );
         }
+
+        // Se o documento tem um CNPJ específico e esse CNPJ não bate com a empresa:
+        if (extracted.companyData.cnpj) {
+          const extDigits = onlyDigits(extracted.companyData.cnpj);
+          if (matchedCompany && onlyDigits(matchedCompany.cnpj) !== extDigits) {
+            hasCompanyMismatch = true;
+            companyMismatchReason = `O documento contém o CNPJ ${extracted.companyData.cnpj}, que diverge da empresa selecionada (${matchedCompany.cnpj}).`;
+          } else if (!matchedCompany) {
+            hasCompanyMismatch = true;
+            companyMismatchReason = `O documento contém o CNPJ ${extracted.companyData.cnpj}, que não pertence a nenhuma empresa cadastrada. Selecione a empresa ou cadastre uma nova.`;
+            matchedCompany = activeCompany;
+          }
+        }
+
         if (!matchedCompany) {
           matchedCompany = activeCompany;
         }
@@ -1464,11 +1481,13 @@ export default function App() {
           fileSize: file.size,
           fileMimeType: file.type || 'application/pdf',
           dataUrl,
-          selectedToSave: !isDuplicate,
+          selectedToSave: !isDuplicate && !hasCompanyMismatch,
           isDuplicate,
           duplicateReason,
           isUnidentified,
           isUnreadable: extracted.isUnreadable,
+          hasCompanyMismatch,
+          companyMismatchReason,
           warnings: extracted.warnings,
           extractionEngine: extracted.extractionEngine,
           matchedCompanyId: matchedCompany.id,
@@ -4140,6 +4159,7 @@ export default function App() {
             {/* DOCUMENTOS BASE DA EMPRESA (CARTÃO CNPJ, CNH DO SÓCIO, CONTRATO SOCIAL) */}
             <CompanyDocumentAttachmentManager
               company={activeCompany}
+              companies={companies}
               onUpdateCompany={(updated) => {
                 setCompanies((prev) =>
                   prev.map((c) => (c.id === activeCompany.id ? { ...c, ...updated } : c))
@@ -4439,6 +4459,40 @@ export default function App() {
                         }
                         className="w-full px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
                       />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Nº Registro CNH
+                      </label>
+                      <input
+                        type="text"
+                        value={activeCompany.partnerCnhNumber || ''}
+                        onChange={(e) => updateActiveCompanyField('partnerCnhNumber', e.target.value)}
+                        className="w-full px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                        placeholder="01234567890"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Cat. & Validade CNH
+                      </label>
+                      <div className="flex gap-1.5">
+                        <input
+                          type="text"
+                          value={activeCompany.partnerCnhCategory || ''}
+                          onChange={(e) => updateActiveCompanyField('partnerCnhCategory', e.target.value.toUpperCase())}
+                          className="w-14 px-2 py-2 text-xs font-mono uppercase bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                          placeholder="AB"
+                        />
+                        <input
+                          type="date"
+                          value={activeCompany.partnerCnhExpirationDate || ''}
+                          onChange={(e) => updateActiveCompanyField('partnerCnhExpirationDate', e.target.value)}
+                          className="flex-1 px-2.5 py-2 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white"
+                        />
+                      </div>
                     </div>
 
                     <div>
@@ -4864,6 +4918,7 @@ export default function App() {
               {/* Gerenciador de Anexos Base com Auto-Leitura de CNPJ e CNH */}
               <CompanyDocumentAttachmentManager
                 company={companyModal.profile}
+                companies={companies}
                 onUpdateCompany={(updated) =>
                   setCompanyModal({
                     ...companyModal,
@@ -5019,6 +5074,56 @@ export default function App() {
                       }
                       className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
                       placeholder="Ex: 81.22-2-00"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Situação Cadastral & Abertura
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={companyModal.profile.cadastralSituation || ''}
+                        onChange={(e) =>
+                          setCompanyModal({
+                            ...companyModal,
+                            profile: { ...companyModal.profile, cadastralSituation: e.target.value.toUpperCase() },
+                          })
+                        }
+                        className="w-24 px-3 py-2 text-sm font-semibold uppercase bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                        placeholder="ATIVA"
+                      />
+                      <input
+                        type="date"
+                        value={companyModal.profile.openingDate || ''}
+                        onChange={(e) =>
+                          setCompanyModal({
+                            ...companyModal,
+                            profile: { ...companyModal.profile, openingDate: e.target.value },
+                          })
+                        }
+                        className="flex-1 px-3 py-2 text-sm font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                        title="Data de Abertura da Empresa"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      CNAEs Secundários (Atividades Econômicas)
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={companyModal.profile.cnaeSecondaryText || ''}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, cnaeSecondaryText: e.target.value },
+                        })
+                      }
+                      className="w-full px-3 py-1.5 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="Códigos e descrições dos CNAEs secundários"
                     />
                   </div>
                 </div>
@@ -5227,6 +5332,56 @@ export default function App() {
                       }
                       className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
                     />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Nº de Registro da CNH
+                    </label>
+                    <input
+                      type="text"
+                      value={companyModal.profile.partnerCnhNumber || ''}
+                      onChange={(e) =>
+                        setCompanyModal({
+                          ...companyModal,
+                          profile: { ...companyModal.profile, partnerCnhNumber: e.target.value },
+                        })
+                      }
+                      className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      placeholder="Ex: 01234567890"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Categoria & Validade da CNH
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={companyModal.profile.partnerCnhCategory || ''}
+                        onChange={(e) =>
+                          setCompanyModal({
+                            ...companyModal,
+                            profile: { ...companyModal.profile, partnerCnhCategory: e.target.value.toUpperCase() },
+                          })
+                        }
+                        className="w-20 px-3 py-2 text-sm font-mono uppercase bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                        placeholder="AB"
+                      />
+                      <input
+                        type="date"
+                        value={companyModal.profile.partnerCnhExpirationDate || ''}
+                        onChange={(e) =>
+                          setCompanyModal({
+                            ...companyModal,
+                            profile: { ...companyModal.profile, partnerCnhExpirationDate: e.target.value },
+                          })
+                        }
+                        className="flex-1 px-3 py-2 text-sm font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                        title="Data de Validade da CNH (extraída diretamente do documento)"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>

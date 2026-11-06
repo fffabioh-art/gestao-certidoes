@@ -15,12 +15,19 @@ import {
   Building,
   CreditCard,
   Plus,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { CompanyProfile, CompanyDocumentAttachment } from '../types/domain';
-import { readCompanyDocument, CompanyDocType } from '../utils/companyDocReader';
+import {
+  readCompanyDocument,
+  CompanyDocType,
+  CompanyDocReadResult,
+} from '../utils/companyDocReader';
+import { CompanyDocReviewModal } from './CompanyDocReviewModal';
 
 interface CompanyDocumentAttachmentManagerProps {
   company: Partial<CompanyProfile>;
+  companies?: CompanyProfile[];
   onUpdateCompany: (updated: Partial<CompanyProfile>) => void;
   onSaveAttachmentDataUrl: (key: string, dataUrl: string) => Promise<void>;
   onGetAttachmentDataUrl: (key: string) => Promise<string | null>;
@@ -28,8 +35,16 @@ interface CompanyDocumentAttachmentManagerProps {
   onPreviewDoc?: (title: string, dataUrl: string, mimeType: string, fileName: string) => void;
 }
 
+interface PendingReviewSession {
+  file: File;
+  dataUrl: string;
+  result: CompanyDocReadResult;
+  replaceIndex: number | null;
+}
+
 export const CompanyDocumentAttachmentManager: React.FC<CompanyDocumentAttachmentManagerProps> = ({
   company,
+  companies = [],
   onUpdateCompany,
   onSaveAttachmentDataUrl,
   onGetAttachmentDataUrl,
@@ -40,6 +55,7 @@ export const CompanyDocumentAttachmentManager: React.FC<CompanyDocumentAttachmen
   const [readingStatus, setReadingStatus] = useState('');
   const [successBanner, setSuccessBanner] = useState<{ title: string; fields: string[] } | null>(null);
   const [targetDocType, setTargetDocType] = useState<CompanyDocType | null>(null);
+  const [reviewSession, setReviewSession] = useState<PendingReviewSession | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const replaceIndexRef = useRef<number | null>(null);
@@ -95,20 +111,47 @@ export const CompanyDocumentAttachmentManager: React.FC<CompanyDocumentAttachmen
     setReadingStatus(`Lendo ${file.name} com OCR e PDF.js...`);
 
     try {
-      const result = await readCompanyDocument(file, (msg) => setReadingStatus(msg), targetDocType || undefined);
+      const result = await readCompanyDocument(
+        file,
+        (msg) => setReadingStatus(msg),
+        targetDocType || undefined,
+        company
+      );
       const dataUrl = await readFileAsDataUrl(file);
 
-      const docId = `compdoc-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      // Abre a tela intuitiva de conferência humana para o usuário validar os dados
+      setReviewSession({
+        file,
+        dataUrl,
+        result,
+        replaceIndex: replaceIndexRef.current,
+      });
+    } catch (err) {
+      console.error('Erro ao ler documento da empresa:', err);
+      alert('Não foi possível ler o documento automaticamente. Você pode anexar e preencher manualmente.');
+    } finally {
+      setIsReading(false);
+      setReadingStatus('');
+      setTargetDocType(null);
+      replaceIndexRef.current = null;
+    }
+  };
+
+  const handleConfirmReview = async (selectedUpdates: Record<string, string>, targetCompanyId?: string) => {
+    if (!reviewSession) return;
+
+    const { file, dataUrl, result, replaceIndex } = reviewSession;
+
+    try {
+      const docId =
+        replaceIndex !== null && replaceIndex >= 0 && documents[replaceIndex]
+          ? documents[replaceIndex].id
+          : `compdoc-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+
       await onSaveAttachmentDataUrl(docId, dataUrl);
 
-      const effectiveType: CompanyDocType = targetDocType || result.detectedType;
-      const effectiveTitle = targetDocType === 'cnpj'
-        ? 'Cartão CNPJ (Receita Federal)'
-        : targetDocType === 'cnh_socio'
-        ? 'CNH do Sócio Administrador'
-        : targetDocType === 'contrato_social'
-        ? 'Contrato Social / JUCEPI'
-        : result.detectedTitle;
+      const effectiveType: CompanyDocType = result.detectedType;
+      const effectiveTitle = result.detectedTitle;
 
       const newAttachment: CompanyDocumentAttachment = {
         id: docId,
@@ -118,80 +161,62 @@ export const CompanyDocumentAttachmentManager: React.FC<CompanyDocumentAttachmen
         fileMimeType: file.type || 'application/pdf',
         fileSize: file.size,
         uploadedAt: new Date().toISOString(),
-        extractedSummary: result.populatedFieldLabels.length > 0
-          ? `Preencheu: ${result.populatedFieldLabels.join(', ')}`
-          : 'Documento cadastrado',
+        extractedSummary:
+          Object.keys(selectedUpdates).length > 0
+            ? `Confirmado: ${Object.keys(selectedUpdates).length} campo(s) atualizado(s)`
+            : 'Documento arquivado sem alteração de campos',
       };
 
-      let updatedDocs = [...documents];
-      if (replaceIndexRef.current !== null && replaceIndexRef.current >= 0) {
-        const oldDoc = updatedDocs[replaceIndexRef.current];
-        if (oldDoc) {
-          await onDeleteAttachmentDataUrl(oldDoc.id).catch(() => {});
-        }
-        updatedDocs[replaceIndexRef.current] = newAttachment;
+      const updatedDocs = [...documents];
+      if (replaceIndex !== null && replaceIndex >= 0) {
+        updatedDocs[replaceIndex] = newAttachment;
       } else {
         updatedDocs.push(newAttachment);
       }
 
-      // ======================================================================
-      // REGRA MESTRA: CNH É A FONTE PRIORITÁRIA ABSOLUTA PARA CPF E DADOS DO SÓCIO
-      // (CPF, Nome do Sócio Administrador, RG e Data de Nascimento).
-      // ======================================================================
-      const isCnhUpload = effectiveType === 'cnh_socio' || result.isCnhPartnerPriority;
-      const partnerFields = ['partnerCpf', 'partnerName', 'partnerRg', 'partnerBirthDate'];
-      const hasCnhInAttachments = updatedDocs.some((d) => d.docType === 'cnh_socio');
-
-      // Atualiza o perfil da empresa aplicando estritamente a prioridade da CNH
+      // Aplica APENAS os campos confirmados e selecionados pelo usuário
       const updatedProfile: Partial<CompanyProfile> = {
         ...company,
         companyDocuments: updatedDocs,
       };
 
-      Object.entries(result.extractedFields).forEach(([k, v]) => {
-        if (v !== undefined && v !== '') {
-          if (partnerFields.includes(k)) {
-            // Se o upload atual for CNH: SEMPRE sobrepõe e define com PRIORIDADE MÁXIMA!
-            if (isCnhUpload) {
-              (updatedProfile as any)[k] = v;
-              if (k === 'partnerCpf') (updatedProfile as any).representativeCpf = v;
-              if (k === 'partnerName') (updatedProfile as any).representativeName = v;
-            } else {
-              // Se o upload NÃO for CNH:
-              // Se a empresa já possui CNH anexada ou o campo já foi preenchido,
-              // NÃO permite que outro documento sobrescreva os dados de sócio da CNH!
-              const currentVal = (company as any)[k];
-              if (!hasCnhInAttachments && (!currentVal || currentVal === '')) {
-                (updatedProfile as any)[k] = v;
-                if (k === 'partnerCpf') (updatedProfile as any).representativeCpf = v;
-                if (k === 'partnerName') (updatedProfile as any).representativeName = v;
-              }
-            }
-          } else {
-            // Campos corporativos (CNPJ, Razão Social, Endereço, etc.) são atualizados normalmente
-            (updatedProfile as any)[k] = v;
-            if (k === 'companyName') (updatedProfile as any).corporateName = v;
-          }
-        }
+      Object.entries(selectedUpdates).forEach(([k, v]) => {
+        (updatedProfile as any)[k] = v;
+        // Aliases para máxima compatibilidade
+        if (k === 'partnerCpf') (updatedProfile as any).representativeCpf = v;
+        if (k === 'partnerName') (updatedProfile as any).representativeName = v;
+        if (k === 'companyName') (updatedProfile as any).corporateName = v;
       });
 
       onUpdateCompany(updatedProfile);
 
-      if (result.populatedFieldLabels.length > 0) {
-        setSuccessBanner({
-          title: isCnhUpload
-            ? `⭐ Prioridade CNH Aplicada: Dados do Sócio extraídos com máxima prioridade da CNH!`
-            : `Leitura concluída com sucesso (${effectiveTitle})!`,
-          fields: result.populatedFieldLabels,
-        });
-      }
-    } catch (err) {
-      console.error('Erro ao ler documento da empresa:', err);
+      setSuccessBanner({
+        title: `Dados confirmados com sucesso (${effectiveTitle})!`,
+        fields: Object.keys(selectedUpdates),
+      });
+
+      setReviewSession(null);
+    } catch (saveErr) {
+      console.error('Erro ao salvar anexo confirmado:', saveErr);
+    }
+  };
+
+  const handleRetryReview = async () => {
+    if (!reviewSession) return;
+    const file = reviewSession.file;
+    setIsReading(true);
+    setReadingStatus(`Re-executando leitura de ${file.name}...`);
+    try {
+      const refreshedResult = await readCompanyDocument(
+        file,
+        (msg) => setReadingStatus(msg),
+        reviewSession.result.detectedType,
+        company
+      );
+      setReviewSession((prev) => (prev ? { ...prev, result: refreshedResult } : null));
     } finally {
       setIsReading(false);
       setReadingStatus('');
-      setTargetDocType(null);
-      replaceIndexRef.current = null;
     }
   };
 
@@ -237,6 +262,36 @@ export const CompanyDocumentAttachmentManager: React.FC<CompanyDocumentAttachmen
     });
   };
 
+  const handleReopenReview = async (doc: CompanyDocumentAttachment, index: number) => {
+    const dataUrl = await onGetAttachmentDataUrl(doc.id);
+    if (!dataUrl) return;
+
+    // Converte dataUrl de volta para blob/file para reabrir a conferência
+    try {
+      const res = await fetch(dataUrl);
+      const blob = await res.blob();
+      const file = new File([blob], doc.fileName || `${doc.title}.pdf`, {
+        type: doc.fileMimeType || 'application/pdf',
+      });
+
+      setIsReading(true);
+      setReadingStatus(`Reabrindo conferência de ${doc.title}...`);
+      const result = await readCompanyDocument(file, undefined, doc.docType, company);
+      setIsReading(false);
+      setReadingStatus('');
+
+      setReviewSession({
+        file,
+        dataUrl,
+        result,
+        replaceIndex: index,
+      });
+    } catch (err) {
+      setIsReading(false);
+      console.error('Falha ao reabrir conferência:', err);
+    }
+  };
+
   return (
     <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/60 space-y-3.5">
       <input
@@ -250,14 +305,32 @@ export const CompanyDocumentAttachmentManager: React.FC<CompanyDocumentAttachmen
         }}
       />
 
+      {/* MODAL DE CONFERÊNCIA INTELIGENTE EM DUAS COLUNAS */}
+      {reviewSession && (
+        <CompanyDocReviewModal
+          isOpen={Boolean(reviewSession)}
+          fileName={reviewSession.file.name}
+          fileMimeType={reviewSession.file.type}
+          dataUrl={reviewSession.dataUrl}
+          detectedType={reviewSession.result.detectedType}
+          detectedTitle={reviewSession.result.detectedTitle}
+          initialItems={reviewSession.result.fieldItems}
+          currentCompany={company}
+          companies={companies}
+          onConfirm={handleConfirmReview}
+          onRetry={handleRetryReview}
+          onCancel={() => setReviewSession(null)}
+        />
+      )}
+
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/80 dark:border-slate-800/80 pb-2.5">
         <div>
           <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
             <Sparkles className="w-4 h-4 text-amber-500" />
-            Documentação da Empresa (CNPJ, CNH do Sócio, Contrato Social)
+            Documentação da Empresa (Cartão CNPJ, CNH do Sócio, Contrato Social)
           </h4>
           <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-            Anexe os documentos para <strong>preenchimento automático inteligente</strong> dos dados. 100% editável a qualquer momento.
+            Anexe os documentos para <strong>conferência e preenchimento inteligente</strong> com comparação lado a lado.
           </p>
         </div>
 
@@ -276,7 +349,7 @@ export const CompanyDocumentAttachmentManager: React.FC<CompanyDocumentAttachmen
           disabled={isReading}
           onClick={() => triggerUpload('cnpj')}
           className="flex items-center justify-center gap-1.5 p-2 text-xs font-semibold text-blue-700 dark:text-blue-300 bg-blue-50/80 hover:bg-blue-100 dark:bg-blue-950/40 dark:hover:bg-blue-900/60 border border-blue-200 dark:border-blue-800/80 rounded-lg transition-colors cursor-pointer shadow-2xs"
-          title="Anexar Cartão CNPJ: lê CNPJ, Razão Social, CNAE, Endereço e CEP"
+          title="Anexar Cartão CNPJ da Receita Federal: lê CNPJ, Razão Social, CNAEs, Endereço e Situação"
         >
           <Building className="w-3.5 h-3.5" />
           <span>+ Cartão CNPJ</span>
@@ -312,7 +385,7 @@ export const CompanyDocumentAttachmentManager: React.FC<CompanyDocumentAttachmen
           disabled={isReading}
           onClick={() => triggerUpload('outro')}
           className="flex items-center justify-center gap-1.5 p-2 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-white hover:bg-slate-100 dark:bg-slate-900 dark:hover:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg transition-colors cursor-pointer shadow-2xs"
-          title="Anexar qualquer outro documento societário ou certidão base"
+          title="Anexar qualquer outro documento societário ou comprovante"
         >
           <Plus className="w-3.5 h-3.5 text-slate-500" />
           <span>+ Outro Doc</span>
@@ -328,11 +401,11 @@ export const CompanyDocumentAttachmentManager: React.FC<CompanyDocumentAttachmen
               {successBanner.title}
             </div>
             <div className="text-emerald-800 dark:text-emerald-300 mt-0.5">
-              Campos preenchidos automaticamente no formulário:{' '}
-              <span className="font-semibold">{successBanner.fields.join(', ')}</span>.
+              Campos confirmados e atualizados:{' '}
+              <span className="font-semibold">{successBanner.fields.length} campo(s)</span>.
             </div>
             <div className="text-[11px] text-emerald-700/80 dark:text-emerald-400/80 mt-1">
-              Você pode conferir ou alterar qualquer campo livremente abaixo.
+              Todos os dados permanecem 100% editáveis no formulário.
             </div>
           </div>
           <button
@@ -389,6 +462,14 @@ export const CompanyDocumentAttachmentManager: React.FC<CompanyDocumentAttachmen
                 <div className="flex items-center gap-1 shrink-0">
                   <button
                     type="button"
+                    onClick={() => handleReopenReview(doc, idx)}
+                    className="p-1 text-slate-500 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded cursor-pointer"
+                    title="Reabrir tela de conferência de dados extraídos"
+                  >
+                    <SlidersHorizontal className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => handlePreview(doc)}
                     className="p-1 text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded cursor-pointer"
                     title="Visualizar documento"
@@ -426,7 +507,7 @@ export const CompanyDocumentAttachmentManager: React.FC<CompanyDocumentAttachmen
         </div>
       ) : (
         <div className="text-center py-2 px-3 bg-white/60 dark:bg-slate-900/50 border border-dashed border-slate-300 dark:border-slate-800 rounded-lg text-xs text-slate-500 dark:text-slate-400">
-          Nenhum documento da empresa anexado ainda. Clique nos botões acima para anexar o Cartão CNPJ ou a CNH do Sócio e preencher os dados automaticamente!
+          Nenhum documento da empresa anexado ainda. Clique nos botões acima para anexar o Cartão CNPJ ou a CNH do Sócio e abrir a conferência automática!
         </div>
       )}
     </div>
